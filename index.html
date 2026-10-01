@@ -16,17 +16,29 @@
     <div class="header-actions"><button id="sync-open" class="save-pill" title="打开跨设备同步"><span id="save-indicator" class="status-dot"></span><span id="save-label">正在恢复棋局</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17H6a4 4 0 0 1-.4-8A6.5 6.5 0 0 1 18 7a5 5 0 0 1 0 10h-1M12 12v9m-3-6 3-3 3 3"/></svg></button><button class="icon-button" id="help-open" aria-label="玩法说明" title="玩法说明">?</button></div>
   </header>
   <main class="game-layout">
+    <aside class="captures-sidebar" aria-label="双方吃子记录">
+      <section class="capture-card" aria-labelledby="black-capture-title">
+        <div class="capture-heading"><h2 id="black-capture-title">黑方吃掉</h2><span id="black-capture-count" class="capture-count">0 枚</span></div>
+        <p class="capture-caption">红方被吃的棋子</p>
+        <div id="black-captured" class="captured-pieces" role="list" aria-label="黑方吃掉的红方棋子"><p class="capture-empty">暂无吃子</p></div>
+      </section>
+      <section class="capture-card" aria-labelledby="red-capture-title">
+        <div class="capture-heading"><h2 id="red-capture-title">红方吃掉</h2><span id="red-capture-count" class="capture-count">0 枚</span></div>
+        <p class="capture-caption">黑方被吃的棋子</p>
+        <div id="red-captured" class="captured-pieces" role="list" aria-label="红方吃掉的黑方棋子"><p class="capture-empty">暂无吃子</p></div>
+      </section>
+    </aside>
     <section class="play-area" aria-label="象棋对弈区">
-      <div class="player-bar"><div class="player-identity"><span class="player-avatar black-avatar">将</span><div><strong id="top-name">电脑棋手</strong><span id="top-description">黑方 · 后手</span></div></div><div class="captured" id="top-captured" aria-label="黑方吃子"></div><span class="turn-badge" id="top-turn">等待落子</span></div>
+      <div class="player-bar"><div class="player-identity"><span class="player-avatar black-avatar">将</span><div><strong id="top-name">电脑棋手</strong><span id="top-description">黑方 · 后手</span></div></div><span class="turn-badge" id="top-turn">等待落子</span></div>
       <div class="board-frame"><div id="board" class="board" role="group" aria-label="象棋棋盘，红方在下方">
         <svg class="board-lines" viewBox="0 0 900 1000" aria-hidden="true"><g id="grid-lines"></g><text class="river-text" x="250" y="512">楚 河</text><text class="river-text" x="650" y="512">汉 界</text></svg>
         <div id="squares"></div>
       </div></div>
-      <div class="player-bar bottom-player"><div class="player-identity"><span class="player-avatar red-avatar">帅</span><div><strong id="bottom-name">我方棋手</strong><span id="bottom-description">红方 · 先手</span></div></div><div class="captured" id="bottom-captured" aria-label="红方吃子"></div><span class="turn-badge active" id="bottom-turn">轮到你了</span></div>
-      <div class="board-toolbar"><button id="undo" class="tool-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5-5 5 5 5M4 10h10a5 5 0 0 1 0 10h-3"/></svg>悔棋</button><span class="toolbar-divider"></span><button id="flip" class="tool-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9a7 7 0 0 1 12-4l2 2M19 3v4h-4M19 15A7 7 0 0 1 7 19l-2-2M5 21v-4h4"/></svg>翻转棋盘</button><span class="board-hint">点选棋子，再点落点</span></div>
+      <div class="player-bar bottom-player"><div class="player-identity"><span class="player-avatar red-avatar">帅</span><div><strong id="bottom-name">我方棋手</strong><span id="bottom-description">红方 · 先手</span></div></div><span class="turn-badge active" id="bottom-turn">轮到你了</span></div>
+      <div class="board-toolbar"><button id="undo-board" class="tool-button undo-quick" aria-describedby="undo-hint" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5-5 5 5 5M4 10h10a5 5 0 0 1 0 10h-3"/></svg>悔棋</button><button id="flip" class="tool-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9a7 7 0 0 1 12-4l2 2M19 3v4h-4M19 15A7 7 0 0 1 7 19l-2-2M5 21v-4h4"/></svg>翻转棋盘</button><span class="board-hint">点选棋子，再点落点</span></div>
     </section>
     <aside class="sidebar" aria-label="对局设置与棋谱">
-      <section class="status-card"><div class="eyebrow">当前对局 <span id="round-label">第 1 回合</span></div><div class="status-heading"><span id="turn-piece" class="turn-piece">帅</span><div><h1 id="game-status">红方先行</h1><p id="game-detail">落子无悔，亦可从容再来。</p></div></div><div class="mode-tabs" role="group" aria-label="对弈模式"><button id="mode-ai" class="selected" aria-pressed="true">人机对弈</button><button id="mode-local" aria-pressed="false">本地双人</button></div><div id="difficulty-row" class="setting-row"><label for="difficulty">电脑难度</label><select id="difficulty"><option value="easy">入门</option><option value="medium" selected>进阶</option><option value="hard">挑战</option></select></div><button id="new-game" class="primary-button"><span>＋</span> 开始新对局</button></section>
+      <section class="status-card"><div class="eyebrow">当前对局 <span id="round-label">第 1 回合</span></div><div class="status-heading"><span id="turn-piece" class="turn-piece">帅</span><div><h1 id="game-status">红方先行</h1><p id="game-detail">落子无悔，亦可从容再来。</p></div></div><div class="mode-tabs" role="group" aria-label="对弈模式"><button id="mode-ai" class="selected" aria-pressed="true">人机对弈</button><button id="mode-local" aria-pressed="false">本地双人</button></div><div id="difficulty-row" class="setting-row"><label for="difficulty">电脑难度</label><select id="difficulty"><option value="easy">入门</option><option value="medium" selected>进阶</option><option value="hard">挑战</option></select></div><div class="game-actions"><button id="undo" class="secondary-button undo-button" aria-describedby="undo-hint" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5-5 5 5 5M4 10h10a5 5 0 0 1 0 10h-3"/></svg>悔棋</button><button id="new-game" class="primary-button">开始新对局</button></div><p id="undo-hint" class="undo-hint">人机悔棋撤回一轮</p></section>
       <section class="moves-card"><div class="card-title"><h2>对局棋谱</h2><span id="move-count">0 手</span></div><div class="moves-columns"><span>回合</span><span>红方</span><span>黑方</span></div><div id="move-list" class="move-list" aria-label="走子记录"><div class="empty-moves"><span>棋</span><p>方寸棋盘，静候开局</p><small>落子后将在这里记录棋谱</small></div></div><div class="record-actions"><button id="export-game">导出棋局</button><span>·</span><button id="import-game">导入棋局</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></section>
       <button class="sync-card" id="sync-card"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="12" height="9" rx="1"/><path d="M6 17h5M9 13v4"/><rect x="15" y="10" width="6" height="11" rx="1"/></svg><span><strong>换个设备，接着下</strong><small>同一网址，自动接续同一盘棋</small></span><span class="sync-plus">＋</span></button>
     </aside>

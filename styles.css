@@ -5,3 +5,50 @@
 @media(max-width:650px){.site-header{padding:16px 18px}.brand-seal{width:34px;height:38px;font-size:25px}.brand-name{font-size:23px;gap:10px;letter-spacing:2px}.brand-name small{font-size:11px;padding-left:11px;letter-spacing:2px}.header-actions{gap:9px}.save-pill{font-size:11px;gap:5px;padding:5px 0}.save-pill svg{display:none}.icon-button{width:25px;height:25px;font-size:17px}.game-layout{display:flex;flex-direction:column;gap:25px;margin-top:22px;padding:0 14px}.play-area{width:100%;max-width:540px;margin:auto}.player-bar{padding-bottom:12px}.player-identity strong{font-size:14px}.player-identity div>span{font-size:11px}.board-frame{padding:8px}.piece{font-size:clamp(22px,6vw,33px)}.bottom-player{padding-top:19px;padding-bottom:0}.board-toolbar{justify-content:center;gap:22px;padding-top:17px}.tool-button{font-size:13px}.sidebar{width:100%;max-width:540px;margin:auto;gap:15px}.status-card{padding:20px}.status-heading{margin:20px 0}.mode-tabs button{padding:12px}.setting-row{font-size:14px}.card-title h2{font-size:17px}.move-list{height:190px}.site-footer{letter-spacing:1px;font-size:10px;margin:28px 18px 0}.site-footer>span:last-child{display:none}.toast{bottom:18px}.dialog-actions{flex-wrap:wrap}.dialog-actions button{min-width:130px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 .copy-row button{white-space:nowrap;flex-shrink:0}
+
+/* Captured pieces retain the board's .piece face, ring and side color. */
+.game-layout{max-width:1280px;grid-template-columns:152px minmax(0,1fr) 300px;gap:24px;grid-template-areas:"captures play sidebar"}
+.play-area{grid-area:play}.sidebar{grid-area:sidebar}
+.captures-sidebar{grid-area:captures;display:flex;flex-direction:column;gap:18px;padding-top:57px;min-width:0}
+.capture-card{background:#fafbf5;border:1px solid #d6ddcf;border-radius:7px;padding:17px 12px 18px;min-height:202px}
+.capture-heading{display:flex;align-items:center;justify-content:space-between;gap:5px}
+.capture-heading h2{font-family:var(--serif);font-size:16px;font-weight:600;margin:0;white-space:nowrap}
+.capture-count{font-size:12px;color:#889580;white-space:nowrap}
+.capture-caption{font-size:12px;line-height:1.6;color:#889580;margin:7px 0 19px}
+.captured-pieces{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-content:start;gap:12px 8px;min-height:108px}
+.captured-piece{width:100%;max-width:52px;justify-self:center;font-size:30px;user-select:none}
+.capture-empty{grid-column:1/-1;font-size:13px;color:#98a18e;text-align:center;margin:28px 0 0}
+.game-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:8px;margin-top:18px}
+.game-actions button{padding:11px 8px;white-space:nowrap}
+.undo-button{display:flex;align-items:center;justify-content:center;gap:7px;border-color:#b6c6ae;color:var(--green);background:#edf2e6;font-weight:600}
+.undo-button:not(:disabled):hover{background:#dfe9d6}
+.undo-button svg{width:18px;height:18px}
+.undo-quick{padding:7px 12px;border:1px solid #b6c6ae;border-radius:5px;background:#edf2e6;color:var(--green);font-weight:600}
+.undo-quick:not(:disabled):hover{background:#dfe9d6}
+.undo-hint{font-size:12px;line-height:1.6;color:#889580;margin:11px 0 0}
+@media(min-width:1050px) and (max-height:900px){
+  .game-layout{max-width:1150px;grid-template-columns:138px minmax(0,1fr) 280px;gap:22px}
+  .captures-sidebar{padding-top:51px}
+  .capture-card{padding:15px 10px}
+  .capture-heading h2{font-size:15px}
+  .captured-piece{font-size:28px}
+}
+@media(min-width:651px) and (max-width:1000px){
+  .game-layout{max-width:800px;grid-template-columns:132px minmax(0,1fr);grid-template-areas:"captures play" ". sidebar";gap:24px 20px}
+  .sidebar{padding-top:0}
+  .captured-piece{font-size:27px}
+  .capture-heading h2{font-size:14px}
+  .capture-card{padding:15px 10px}
+}
+@media(max-width:650px){
+  .game-layout{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"play" "captures" "sidebar";gap:20px}
+  .captures-sidebar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:0;width:100%;max-width:540px;margin:auto}
+  .capture-card{min-height:156px;padding:14px 11px 16px}
+  .capture-heading h2{font-size:15px}
+  .capture-caption{margin-bottom:13px;font-size:11px}
+  .captured-pieces{grid-template-columns:repeat(auto-fit,minmax(35px,1fr));gap:10px 6px;min-height:65px}
+  .captured-piece{max-width:46px;font-size:26px}
+  .capture-empty{margin-top:14px}
+  .game-actions{grid-template-columns:1fr 1.5fr}
+}
+@media(max-width:360px){.capture-heading{align-items:flex-start;flex-direction:column}.capture-count{font-size:11px}.captured-piece{font-size:23px}}

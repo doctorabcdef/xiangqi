@@ -63,15 +63,33 @@ function render() {
     const active = !end && game.side === side;
     $(position + '-turn').textContent = end ? '对局结束' : active ? side === 'black' && thinking ? '思考中…' : '正在行棋' : '等待落子';
     $(position + '-turn').classList.toggle('active', active);
-    $(position + '-captured').replaceChildren();
-    for (const record of game.records.filter(m => m.side === side && m.captured)) {
-      const el = document.createElement('span'); el.textContent = label(record.captured); $(position + '-captured').append(el);
+  }
+  // Derive captures from the current replay, so undo, imports and cloud restores
+  // always restore both the board and the captured-piece trays together.
+  for (const side of ['black', 'red']) {
+    const captures = game.records.filter(record => record.side === side && record.captured);
+    const tray = $(side + '-captured');
+    tray.replaceChildren();
+    $(side + '-capture-count').textContent = captures.length + ' 枚';
+    if (!captures.length) {
+      const empty = document.createElement('p'); empty.className = 'capture-empty'; empty.textContent = '暂无吃子'; tray.append(empty);
+    }
+    for (const { captured } of captures) {
+      const piece = document.createElement('span');
+      piece.className = 'piece ' + captured.side + ' captured-piece';
+      piece.textContent = label(captured);
+      piece.title = sideName(side) + '吃掉的' + sideName(captured.side) + label(captured);
+      piece.setAttribute('role', 'listitem'); piece.setAttribute('aria-label', piece.title);
+      tray.append(piece);
     }
   }
   $('mode-ai').classList.toggle('selected', state.mode === 'ai'); $('mode-ai').setAttribute('aria-pressed', state.mode === 'ai');
   $('mode-local').classList.toggle('selected', state.mode === 'local'); $('mode-local').setAttribute('aria-pressed', state.mode === 'local');
   $('difficulty-row').hidden = state.mode !== 'ai'; $('difficulty').value = state.difficulty;
   $('undo').disabled = !ready || !state.moves.length || Boolean(sync.conflict);
+  $('undo-board').disabled = $('undo').disabled;
+  const undoHint = state.mode === 'ai' ? game.side === 'black' ? '撤回刚走的一步，并取消电脑落子' : '人机悔棋撤回双方最近一轮' : '双人悔棋撤回最近一步';
+  $('undo').title = $('undo-board').title = undoHint; $('undo-hint').textContent = undoHint;
   $('new-game').disabled = !ready || Boolean(sync.conflict);
   $('move-count').textContent = state.moves.length + ' 手';
   const list = $('move-list');
@@ -148,11 +166,12 @@ async function changeMode(mode) {
 $('mode-ai').onclick = () => changeMode('ai'); $('mode-local').onclick = () => changeMode('local');
 $('difficulty').onchange = () => { if (ready && !sync.conflict) commit({ ...state, difficulty: $('difficulty').value }); else render(); };
 $('new-game').onclick = async () => { if (await confirmAction('开始一盘新棋？', '当前棋局会被替换，并同步到其他设备。你可以先导出棋局留作备份。', '开始新局')) commit(freshState(state.mode, state.difficulty)); };
-$('undo').onclick = () => {
+function undoMove() {
   if (!ready || sync.conflict || !state.moves.length) return;
   const count = state.mode === 'ai' && game.side === 'red' ? 2 : 1;
   commit({ ...state, moves: state.moves.slice(0, Math.max(0, state.moves.length - count)) }); toast('已悔棋');
-};
+}
+$('undo').onclick = undoMove; $('undo-board').onclick = undoMove;
 $('flip').onclick = () => { flipped = !flipped; try { localStorage.setItem('yijian.flip', String(flipped)); } catch {} render(); };
 $('help-open').onclick = () => $('help-dialog').showModal();
 for (const button of document.querySelectorAll('[data-close]')) button.onclick = () => $(button.dataset.close).close();

@@ -96,6 +96,100 @@ test('local game saves, reloads, flips and undoes a move', async ({ page, contex
   expect(errors).toEqual([]);
 });
 
+test('captured-piece trays retain ownership when flipped and undo syncs restored pieces across browsers', async ({ page, context, browser }) => {
+  const cloud = cloudServer();
+  await cloud.attach(context);
+  await ready(page);
+  await page.locator('#mode-local').click();
+  const blackCaptures = page.locator('#black-captured');
+  const redCaptures = page.locator('#red-captured');
+  await expect(blackCaptures.locator('.piece')).toHaveCount(0);
+  await expect(redCaptures.locator('.piece')).toHaveCount(0);
+  await expect(page.locator('#undo')).toBeDisabled();
+  await expect(page.locator('#undo-board')).toBeDisabled();
+
+  // Each cannon jumps the opposing cannon to take a horse on the far rank.
+  await move(page, 64, 1);
+  await expect(redCaptures.locator('.piece.black')).toHaveText('马');
+  await expect(blackCaptures.locator('.piece')).toHaveCount(0);
+  await move(page, 25, 88);
+  await expect(blackCaptures.locator('.piece.red')).toHaveText('马');
+  await expect(redCaptures.locator('.piece.black')).toHaveText('马');
+  await expect(page.locator('#black-capture-count')).toHaveText('1 枚');
+  await expect(page.locator('#red-capture-count')).toHaveText('1 枚');
+  await expect(blackCaptures.locator('.piece.red')).toHaveAttribute('aria-label', '黑方吃掉的红方马');
+  await expect(redCaptures.locator('.piece.black')).toHaveAttribute('aria-label', '红方吃掉的黑方马');
+  await expect(page.locator('#board .piece')).toHaveCount(30);
+  await expect(page.locator('#undo')).toBeEnabled();
+  await expect(blackCaptures.locator('.piece.red')).toHaveCSS('border-radius', '50%');
+  await expect(redCaptures.locator('.piece.black')).toHaveCSS('border-radius', '50%');
+  const boardColors = await page.locator('#board .piece').evaluateAll(pieces => ({
+    red: getComputedStyle(pieces.find(piece => piece.classList.contains('red'))).color,
+    black: getComputedStyle(pieces.find(piece => piece.classList.contains('black'))).color,
+  }));
+  await expect(blackCaptures.locator('.piece.red')).toHaveCSS('color', boardColors.red);
+  await expect(redCaptures.locator('.piece.black')).toHaveCSS('color', boardColors.black);
+  const boardBounds = await page.locator('.board-frame').boundingBox();
+  for (const tray of [blackCaptures, redCaptures]) {
+    const bounds = await tray.boundingBox();
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(boardBounds.x);
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(blackCaptures.locator('.piece.red')).toBeVisible();
+  await expect(redCaptures.locator('.piece.black')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 1080 });
+
+  await saved(page);
+  await page.reload();
+  await expect(page.locator('#move-count')).toHaveText('2 手');
+  await expect(blackCaptures.locator('.piece.red')).toHaveText('马');
+  await expect(redCaptures.locator('.piece.black')).toHaveText('马');
+  await page.locator('#flip').click();
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /黑方在下方/);
+  await expect(blackCaptures.locator('.piece.red')).toHaveText('马');
+  await expect(redCaptures.locator('.piece.black')).toHaveText('马');
+
+  const second = await openSecondDevice(browser, cloud, page);
+  try {
+    await expect(second.page.locator('#black-captured .piece.red')).toHaveText('马');
+    await expect(second.page.locator('#red-captured .piece.black')).toHaveText('马');
+    await second.page.locator('#undo').click();
+    await expect(second.page.locator('#move-count')).toHaveText('1 手');
+    await expect(second.page.locator('#black-captured .piece')).toHaveCount(0);
+    await expect(second.page.locator('#black-capture-count')).toHaveText('0 枚');
+    await expect(second.page.locator('#red-capture-count')).toHaveText('1 枚');
+    await expect(second.page.locator('#red-captured .piece.black')).toHaveText('马');
+    await expect(second.page.locator('[data-index="88"] .piece.red')).toHaveText('马');
+    await expect(second.page.locator('[data-index="25"] .piece.black')).toHaveText('炮');
+    await saved(second.page);
+    await poll(page);
+    await expect(page.locator('#move-count')).toHaveText('1 手');
+    await expect(blackCaptures.locator('.piece')).toHaveCount(0);
+    await expect(page.locator('[data-index="88"] .piece.red')).toHaveText('马');
+    await page.reload();
+    await expect(page.locator('#move-count')).toHaveText('1 手');
+    await expect(blackCaptures.locator('.piece')).toHaveCount(0);
+    await expect(redCaptures.locator('.piece.black')).toHaveText('马');
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator('#undo-board')).toBeEnabled();
+    await page.locator('#undo-board').click();
+    await expect(page.locator('#move-count')).toHaveText('0 手');
+    await expect(blackCaptures.locator('.piece')).toHaveCount(0);
+    await expect(redCaptures.locator('.piece')).toHaveCount(0);
+    await expect(page.locator('[data-index="1"] .piece.black')).toHaveText('马');
+    await expect(page.locator('[data-index="64"] .piece.red')).toHaveText('炮');
+    await expect(page.locator('#board .piece')).toHaveCount(32);
+    await saved(page);
+    await poll(second.page);
+    await expect(second.page.locator('#move-count')).toHaveText('0 手');
+    await expect(second.page.locator('#black-captured .piece, #red-captured .piece')).toHaveCount(0);
+    expect((await snapshot(second.page)).state.moves).toEqual([]);
+  } finally { await second.context.close(); }
+});
+
 test('refresh while AI is thinking recovers its move and undo restores both turns', async ({ page, context }) => {
   await cloudServer().attach(context);
   await ready(page);
