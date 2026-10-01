@@ -1,0 +1,214 @@
+import { test, expect } from '@playwright/test';
+
+const CLOUD_API = 'https://yijian-xiangqi-sync.cx668899668899.chatgpt.site/api/game';
+const STORAGE_KEY = 'yijian.xiangqi.v1';
+
+function cloudServer() {
+  const games = new Map();
+  async function attach(context) {
+    const connection = { offline: false };
+    await context.route(CLOUD_API, async route => {
+      if (connection.offline) return route.abort('internetdisconnected');
+      const request = route.request();
+      const code = request.headers().authorization?.replace(/^Bearer /, '');
+      const headers = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization,content-type' };
+      const reply = (status, json) => route.fulfill({ status, headers, contentType: 'application/json', body: JSON.stringify(json) });
+      if (request.method() === 'OPTIONS') return reply(200, {});
+      if (!code) return reply(401, { error: 'Missing sync code' });
+      const existing = games.get(code);
+      if (request.method() === 'GET') return existing ? reply(200, existing) : reply(404, { error: 'Not found' });
+      const body = request.postDataJSON();
+      if (body.baseRevision !== (existing?.revision ?? 0)) return reply(409, existing);
+      const saved = structuredClone({ revision: (existing?.revision ?? 0) + 1, state: body.state });
+      games.set(code, saved);
+      return reply(200, saved);
+    });
+    return connection;
+  }
+  return { games, attach };
+}
+
+async function ready(page) {
+  await page.goto('/');
+  await expect(page.locator('#game-status')).not.toHaveText('恢复棋局中');
+  await expect(page.locator('#save-label')).toHaveText('已同步到云端');
+}
+
+async function move(page, from, to) {
+  await page.locator(`[data-index="${from}"]`).click();
+  await expect(page.locator(`[data-index="${to}"]`)).toHaveClass(/target/);
+  await page.locator(`[data-index="${to}"]`).click();
+}
+
+async function snapshot(page) {
+  return page.evaluate(key => JSON.parse(localStorage.getItem(key)), STORAGE_KEY);
+}
+
+async function saved(page) {
+  await expect(page.locator('#save-label')).toHaveText('已同步到云端');
+}
+
+async function poll(page) {
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await saved(page);
+}
+
+async function openSecondDevice(browser, cloud, first) {
+  const code = (await snapshot(first)).code;
+  const cloudBeforeOpen = structuredClone(cloud.games.get(code));
+  const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
+  const connection = await cloud.attach(context);
+  const page = await context.newPage();
+  await ready(page);
+  await expect(page.locator('#sync-dialog')).not.toBeVisible();
+  await expect(page.locator('#conflict-dialog')).not.toBeVisible();
+  expect((await snapshot(page)).code).toBe(code);
+  expect((await snapshot(page)).state.moves).toEqual(cloudBeforeOpen.state.moves);
+  // A fresh browser must load the shared table without writing an empty board.
+  expect(cloud.games.get(code)).toEqual(cloudBeforeOpen);
+  return { context, page, connection, code };
+}
+
+test('local game saves, reloads, flips and undoes a move', async ({ page, context }) => {
+  const cloud = cloudServer();
+  await cloud.attach(context);
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await ready(page);
+  await expect(page.locator('.piece')).toHaveCount(32);
+  await page.locator('#mode-local').click();
+  await move(page, 54, 45);
+  await move(page, 27, 36);
+  await saved(page);
+  const before = await snapshot(page);
+  await page.screenshot({ path: 'artifacts/desktop.png', fullPage: true });
+  await page.reload();
+  await expect(page.locator('#move-count')).toHaveText('2 手');
+  await saved(page);
+  expect((await snapshot(page)).state.moves).toEqual(before.state.moves);
+  await page.locator('#flip').click();
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /黑方在下方/);
+  await page.reload();
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /黑方在下方/);
+  await page.locator('#undo').click();
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  await expect(page.locator('[data-index="27"] .piece')).toHaveText('卒');
+  expect(errors).toEqual([]);
+});
+
+test('refresh while AI is thinking recovers its move and undo restores both turns', async ({ page, context }) => {
+  await cloudServer().attach(context);
+  await ready(page);
+  await page.locator('#difficulty').selectOption('easy');
+  await move(page, 54, 45);
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  await page.reload();
+  await expect(page.locator('#move-count')).toHaveText('2 手');
+  await expect(page.locator('#game-status')).toHaveText('红方行棋');
+  expect((await snapshot(page)).state.moves[0]).toEqual({ from: 54, to: 45 });
+  await page.locator('#undo').click();
+  await expect(page.locator('#move-count')).toHaveText('0 手');
+  await expect(page.locator('#game-status')).toHaveText('红方先行');
+});
+
+test('fresh browsers automatically resume the shared board without codes or startup overwrites', async ({ page, context, browser }) => {
+  const cloud = cloudServer();
+  await cloud.attach(context);
+  await ready(page);
+  await page.locator('#mode-local').click();
+  await move(page, 54, 45);
+  await saved(page);
+  const second = await openSecondDevice(browser, cloud, page);
+  try {
+    await expect(second.page.locator('#move-count')).toHaveText('1 手');
+    expect((await snapshot(second.page)).code).toBe(second.code);
+    await move(second.page, 27, 36);
+    await saved(second.page);
+    await poll(page);
+    await expect(page.locator('#move-count')).toHaveText('2 手');
+    expect((await snapshot(page)).state.moves).toEqual((await snapshot(second.page)).state.moves);
+    await second.page.reload();
+    await expect(second.page.locator('#move-count')).toHaveText('2 手');
+    const third = await openSecondDevice(browser, cloud, page);
+    try {
+      await expect(third.page.locator('#move-count')).toHaveText('2 手');
+      await expect(third.page.locator('#mode-local')).toHaveAttribute('aria-pressed', 'true');
+    } finally { await third.context.close(); }
+  } finally { await second.context.close(); }
+});
+
+test('invalid import and unknown sync code preserve the current game', async ({ page, context }) => {
+  await cloudServer().attach(context);
+  await ready(page);
+  await page.locator('#mode-local').click();
+  await move(page, 54, 45);
+  const before = (await snapshot(page)).state.moves;
+  await page.locator('#import-file').setInputFiles({ name: 'invalid.json', mimeType: 'application/json', buffer: Buffer.from('{not valid json') });
+  await expect(page.locator('#toast')).toHaveText('文件不是有效的棋局 JSON');
+  await expect(page.locator('#confirm-dialog')).not.toBeVisible();
+  const badState = { version: 1, mode: 'local', difficulty: 'easy', moves: [{ from: 54, to: 0 }] };
+  await page.locator('#import-file').setInputFiles({ name: 'illegal.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(badState)) });
+  await expect(page.locator('#toast')).toContainText(/非法|着法|合法|棋谱/);
+  expect((await snapshot(page)).state.moves).toEqual(before);
+  await page.locator('#sync-open').click();
+  await page.locator('#join-code').fill('a'.repeat(32));
+  await page.locator('#join-game').click();
+  await page.locator('#confirm-action').click();
+  await expect(page.locator('#join-error')).toContainText('找不到这个棋局');
+  expect((await snapshot(page)).state.moves).toEqual(before);
+});
+
+for (const choice of ['cloud', 'local']) {
+  test(`offline divergent moves show conflict and preserve selected ${choice} progress`, async ({ page, context, browser }) => {
+    const cloud = cloudServer();
+    await cloud.attach(context);
+    await ready(page);
+    await page.locator('#mode-local').click();
+    await move(page, 54, 45);
+    await saved(page);
+    const second = await openSecondDevice(browser, cloud, page);
+    try {
+      second.connection.offline = true;
+      await move(second.page, 29, 38);
+      await expect(second.page.locator('#save-label')).toHaveText('已存本机，等待联网同步');
+      await move(page, 27, 36);
+      await saved(page);
+      second.connection.offline = false;
+      await second.page.evaluate(() => window.dispatchEvent(new Event('online')));
+      await expect(second.page.locator('#conflict-dialog')).toBeVisible();
+      await expect(second.page.locator('#undo')).toBeDisabled();
+      await second.page.keyboard.press('Escape');
+      await expect(second.page.locator('#conflict-dialog')).toBeVisible();
+      await second.page.locator(`#use-${choice}`).click();
+      await expect(second.page.locator('#conflict-dialog')).not.toBeVisible();
+      await saved(second.page);
+      const expected = choice === 'cloud' ? { from: 27, to: 36 } : { from: 29, to: 38 };
+      expect((await snapshot(second.page)).state.moves.at(-1)).toEqual(expected);
+      expect(cloud.games.get(second.code).state.moves.at(-1)).toEqual(expected);
+      await poll(page);
+      expect((await snapshot(page)).state.moves.at(-1)).toEqual(expected);
+    } finally { await second.context.close(); }
+  });
+}
+
+test('mobile board, dialogs and controls fit without horizontal overflow', async ({ page, context }) => {
+  await cloudServer().attach(context);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await ready(page);
+  await page.locator('#mode-local').click();
+  await move(page, 54, 45);
+  await saved(page);
+  const noOverflow = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  expect(await noOverflow()).toBe(true);
+  await page.screenshot({ path: 'artifacts/mobile.png', fullPage: true });
+  await page.locator('#sync-open').click();
+  await expect(page.locator('#sync-dialog')).toBeVisible();
+  expect(await noOverflow()).toBe(true);
+  const bounds = await page.locator('#sync-dialog').boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: 'artifacts/mobile-sync.png', fullPage: true });
+  await page.locator('[data-close="sync-dialog"]').click();
+  await page.setViewportSize({ width: 320, height: 740 });
+  expect(await noOverflow()).toBe(true);
+});
