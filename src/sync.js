@@ -36,7 +36,8 @@ export class GameSync {
     } catch { this.localWritable = false; }
   }
   async request(code, method = 'GET', body) {
-    const response = await fetch(CLOUD_URL + '/api/game', { method, headers: { Authorization: `Bearer ${code}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(10000), cache: 'no-store', credentials: 'omit' });
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new Error('当前处于离线状态');
+    const response = await fetch(CLOUD_URL + '/api/game', { method, headers: { Authorization: `Bearer ${code}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000), cache: 'no-store', credentials: 'omit' });
     if (response.status === 404) return null;
     let data;
     try { data = await response.json(); } catch { throw new Error('云端暂时不可用'); }

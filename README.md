@@ -32,7 +32,7 @@ npm run dev
 
 ## 部署
 
-前端目标：`https://doctorabcdef.github.io/xiangqi/`。仓库提供 `.github/workflows/pages.yml`：推送 main 时验证并发布。在 GitHub 仓库 Settings → Pages 中，发布源选择 **GitHub Actions**。也可发布构建产物到 gh-pages 分支并采用该分支的根目录。
+前端地址：`https://doctorabcdef.github.io/xiangqi/`。源码位于 `main` 分支，构建产物位于 `gh-pages` 分支，GitHub Pages 使用 `gh-pages` 的根目录发布。`.github/workflows/checks.yml` 会在 main 更新时执行测试和构建，并保存网页产物。更新网页时，应将新的 `dist/` 内容发布到 gh-pages；源码检查不会绕过仓库的部署分支保护规则。
 
 `cloud/` 是云同步服务的完整源码。`src/config.js` 指向该服务的 HTTPS 地址。服务部署时需 D1 的 `DB` 绑定，并执行 `cloud/drizzle/` 下的迁移；`npm --prefix cloud run build` 生成 `cloud/dist/server/index.js`。迁移文件已提交，重新生成仅在修改 schema 时执行：`npm --prefix cloud ci`、`npm --prefix cloud run db:generate`。
 
