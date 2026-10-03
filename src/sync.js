@@ -3,7 +3,7 @@ import { CLOUD_URL, DEFAULT_ROOM_CODE } from './config.js';
 export const STORAGE_KEY = 'yijian.xiangqi.v1';
 const codePattern = /^[A-Za-z0-9_-]{32}$/;
 export const validCode = value => codePattern.test(value);
-const same = (a, b) => a.mode === b.mode && a.difficulty === b.difficulty && JSON.stringify(a.moves) === JSON.stringify(b.moves);
+const same = (a, b) => a.mode === b.mode && a.difficulty === b.difficulty && (a.humanSide ?? 'red') === (b.humanSide ?? 'red') && JSON.stringify(a.moves) === JSON.stringify(b.moves);
 export class GameSync {
   constructor({ onRemote, onStatus, onConflict }) {
     this.onRemote = onRemote; this.onStatus = onStatus; this.onConflict = onConflict;
