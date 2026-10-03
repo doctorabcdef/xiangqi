@@ -200,6 +200,48 @@ test('a genuine external conflict preserves local history until the cloud copy i
   assert.equal(events.remote.length, 1);
 });
 
+test('a remote side-only change updates the UI even when the move list is unchanged', async () => {
+  const { sync, events } = client(stateAt(0), 1, false);
+  const cloud = { ...stateAt(0), humanSide: 'black' };
+  globalThis.fetch = async () => response(remote(cloud, 2));
+  await sync.flush();
+  assert.equal(sync.data.state.humanSide, 'black');
+  assert.equal(events.remote.length, 1);
+  assert.equal(events.remote[0].humanSide, 'black');
+  assert.equal(events.conflicts, 0);
+});
+
+test('pending local and cloud games with different human sides require conflict resolution', async () => {
+  const { sync, events } = client({ ...stateAt(0), humanSide: 'red' }, 1, true);
+  globalThis.fetch = async () => response(remote({ ...stateAt(0), humanSide: 'black' }, 2));
+  await sync.flush();
+  assert.equal(events.conflicts, 1);
+  assert.equal(sync.data.state.humanSide, 'red');
+  assert.equal(sync.conflict.state.humanSide, 'black');
+});
+
+test('a side choice made during a PUT remains pending and is uploaded next', async () => {
+  const { sync } = client({ ...stateAt(0), humanSide: 'red' }, 1, true);
+  let finishFirst;
+  const writes = [];
+  globalThis.fetch = async (_url, options) => {
+    if (options.method === 'GET') return response(remote(stateAt(0), 1));
+    const body = JSON.parse(options.body); writes.push(body);
+    if (writes.length === 1) return new Promise(resolve => { finishFirst = resolve; });
+    return response({ revision: 3 });
+  };
+  const flushing = sync.flush();
+  while (!finishFirst) await new Promise(resolve => setImmediate(resolve));
+  sync.save({ ...stateAt(0), humanSide: 'black' });
+  finishFirst(response({ revision: 2 }));
+  await flushing;
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].state.humanSide, 'red');
+  assert.equal(writes[1].state.humanSide, 'black');
+  assert.equal(writes[1].baseRevision, 2);
+  assert.equal(sync.data.pending, false);
+});
+
 test('choosing local after a conflict uploads against the latest cloud revision', async () => {
   const { sync } = client(stateAt(1), 1, true);
   const cloud = { ...stateAt(0), mode: 'local' };

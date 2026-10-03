@@ -52,3 +52,6 @@
   .game-actions{grid-template-columns:1fr 1.5fr}
 }
 @media(max-width:360px){.capture-heading{align-items:flex-start;flex-direction:column}.capture-count{font-size:11px}.captured-piece{font-size:23px}}
+#human-side{width:134px}
+#human-side-row{margin-bottom:14px}
+#human-side-row + .setting-row{margin-top:14px}

@@ -205,6 +205,132 @@ test('refresh while AI is thinking recovers its move and undo restores both turn
   await expect(page.locator('#game-status')).toHaveText('红方先行');
 });
 
+test('human black gets a red AI opening and keeps its side through undo, reload, another browser and new game', async ({ page, context, browser }) => {
+  const cloud = cloudServer();
+  await cloud.attach(context);
+  await ready(page);
+  await expect(page.locator('#human-side')).toHaveValue('red');
+  await page.locator('#difficulty').selectOption('easy');
+  await page.locator('#human-side').selectOption('black');
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  await expect(page.locator('#game-status')).toHaveText('黑方行棋');
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /黑方在下方/);
+  await expect(page.locator('#bottom-name')).toHaveText('我方棋手');
+  await expect(page.locator('#top-name')).toHaveText('电脑棋手');
+  await expect(page.locator('#undo')).toBeDisabled();
+  await expect(page.locator('#undo-board')).toBeDisabled();
+  const opening = (await snapshot(page)).state.moves;
+  expect(opening).toHaveLength(1);
+  expect((await snapshot(page)).state.humanSide).toBe('black');
+  await page.screenshot({ path: 'artifacts/human-black-desktop.png', fullPage: true });
+
+  await page.locator('#board .square:has(.piece.red)').first().click();
+  await expect(page.locator('#board .square.selected')).toHaveCount(0);
+  await expect(page.locator('#board .square.target')).toHaveCount(0);
+  expect((await snapshot(page)).state.moves).toEqual(opening);
+  await move(page, 27, 36);
+  await expect(page.locator('#move-count')).toHaveText('3 手');
+  await expect(page.locator('#game-status')).toHaveText('黑方行棋');
+  await page.locator('#undo').click();
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  expect((await snapshot(page)).state.moves).toEqual(opening);
+  await expect(page.locator('[data-index="27"] .piece.black')).toHaveText('卒');
+  await saved(page);
+
+  await page.reload();
+  await expect(page.locator('#human-side')).toHaveValue('black');
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  await expect(page.locator('#game-status')).toHaveText('黑方行棋');
+  await expect(page.locator('#undo')).toBeDisabled();
+  const second = await openSecondDevice(browser, cloud, page);
+  try {
+    await expect(second.page.locator('#human-side')).toHaveValue('black');
+    await expect(second.page.locator('#board')).toHaveAttribute('aria-label', /黑方在下方/);
+    await expect(second.page.locator('#game-status')).toHaveText('黑方行棋');
+    await expect(second.page.locator('#undo')).toBeDisabled();
+    expect((await snapshot(second.page)).state.humanSide).toBe('black');
+  } finally { await second.context.close(); }
+
+  await page.locator('#new-game').click();
+  await page.locator('#confirm-action').click();
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  await expect(page.locator('#game-status')).toHaveText('黑方行棋');
+  await expect(page.locator('#human-side')).toHaveValue('black');
+  expect((await snapshot(page)).state.humanSide).toBe('black');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.locator('#human-side')).toBeVisible();
+  await page.screenshot({ path: 'artifacts/human-black-mobile.png', fullPage: true });
+});
+
+test('human black can undo a pending red AI reply and refresh resumes exactly one red reply', async ({ page, context }) => {
+  await cloudServer().attach(context);
+  await page.addInitScript(() => {
+    window.__holdAI = false;
+    window.__heldAI = false;
+    const BrowserWorker = window.Worker;
+    window.Worker = class extends BrowserWorker {
+      postMessage(value, ...rest) {
+        if (window.__holdAI) { window.__heldAI = true; return; }
+        return super.postMessage(value, ...rest);
+      }
+    };
+  });
+  await ready(page);
+  await page.locator('#difficulty').selectOption('easy');
+  await page.locator('#human-side').selectOption('black');
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  const opening = (await snapshot(page)).state.moves;
+  await page.evaluate(() => { window.__holdAI = true; });
+  await move(page, 27, 36);
+  await expect.poll(() => page.evaluate(() => window.__heldAI)).toBe(true);
+  await expect(page.locator('#move-count')).toHaveText('2 手');
+  await expect(page.locator('#game-status')).toHaveText('红方思考中');
+  await expect(page.locator('#undo-board')).toBeEnabled();
+  await page.locator('#undo-board').click();
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  await expect(page.locator('#game-status')).toHaveText('黑方行棋');
+  expect((await snapshot(page)).state.moves).toEqual(opening);
+  await expect(page.locator('#undo-board')).toBeDisabled();
+
+  // Keep the reply pending until reload; the new page's real worker must finish it.
+  await move(page, 27, 36);
+  await expect(page.locator('#move-count')).toHaveText('2 手');
+  await page.reload();
+  await expect(page.locator('#move-count')).toHaveText('3 手');
+  await expect(page.locator('#game-status')).toHaveText('黑方行棋');
+  expect((await snapshot(page)).state.moves.slice(0, 2)).toEqual([...opening, { from: 27, to: 36 }]);
+  await page.locator('#undo').click();
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  expect((await snapshot(page)).state.moves).toEqual(opening);
+});
+
+test('canceling a side change preserves black progress and confirming it starts a fresh red game', async ({ page, context }) => {
+  await cloudServer().attach(context);
+  await ready(page);
+  await page.locator('#difficulty').selectOption('easy');
+  await page.locator('#human-side').selectOption('black');
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  const before = (await snapshot(page)).state;
+  await page.locator('#human-side').selectOption('red');
+  await expect(page.locator('#confirm-dialog')).toBeVisible();
+  await page.locator('#confirm-dialog').getByRole('button', { name: '再想想', exact: true }).click();
+  await expect(page.locator('#confirm-dialog')).not.toBeVisible();
+  await expect(page.locator('#human-side')).toHaveValue('black');
+  expect((await snapshot(page)).state).toEqual(before);
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /黑方在下方/);
+
+  await page.locator('#human-side').selectOption('red');
+  await page.locator('#confirm-action').click();
+  await expect(page.locator('#human-side')).toHaveValue('red');
+  await expect(page.locator('#move-count')).toHaveText('0 手');
+  await expect(page.locator('#game-status')).toHaveText('红方先行');
+  await expect(page.locator('#board')).toHaveAttribute('aria-label', /红方在下方/);
+  expect((await snapshot(page)).state.humanSide).toBe('red');
+  await page.locator('#mode-local').click();
+  await expect(page.locator('#human-side')).toBeHidden();
+});
+
 test('fresh browsers automatically resume the shared board without codes or startup overwrites', async ({ page, context, browser }) => {
   const cloud = cloudServer();
   await cloud.attach(context);

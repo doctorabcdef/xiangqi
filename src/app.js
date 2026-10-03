@@ -3,14 +3,27 @@ import { freshState, validateState } from './state.js';
 import { GameSync } from './sync.js';
 const $ = id => document.getElementById(id);
 let state, game, selected = null, targets = [], flipped = false, ready = false, thinking = false, worker = null, aiTimer = null, generation = 0, toastTimer;
-try { flipped = localStorage.getItem('yijian.flip') === 'true'; } catch {}
+function saveOrientation(next = state) {
+  try { localStorage.setItem('yijian.flip', String(flipped)); localStorage.setItem('yijian.flip-side', next.humanSide); } catch {}
+}
+function orientFor(next, previous) {
+  if (previous && next.humanSide === previous.humanSide && next.mode === previous.mode) return;
+  flipped = next.mode === 'ai' && next.humanSide === 'black';
+  if (!previous) {
+    try {
+      const stored = localStorage.getItem('yijian.flip');
+      if (stored !== null && (localStorage.getItem('yijian.flip-side') ?? 'red') === next.humanSide) flipped = stored === 'true';
+    } catch {}
+  }
+  saveOrientation(next);
+}
 function toast(message) { clearTimeout(toastTimer); $('toast').textContent = message; $('toast').hidden = false; toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4000); }
 const sync = new GameSync({
   onStatus(kind, message) { $('save-label').textContent = message.split(' · ')[0]; $('save-indicator').className = 'status-dot ' + (kind === 'saved' ? '' : kind); $('sync-detail').textContent = message; },
-  onRemote(next) { cancelAI(); state = next; game = replay(state.moves); selected = null; targets = []; render(); maybeAI(); },
+  onRemote(next) { cancelAI(); orientFor(next, state); state = next; game = replay(state.moves); selected = null; targets = []; render(); maybeAI(); },
   onConflict() { cancelAI(); if (!$('conflict-dialog').open) $('conflict-dialog').showModal(); render(); },
 });
-state = sync.data.state; game = replay(state.moves);
+state = sync.data.state; orientFor(state); game = replay(state.moves);
 const grid = [];
 for (let row = 0; row < 10; row++) grid.push(`<path d="M50 ${row * 100 + 50}H850"/>`);
 for (let col = 0; col < 9; col++) grid.push(`<path d="M${col * 100 + 50} 50V${col === 0 || col === 8 ? 950 : 450}${col > 0 && col < 8 ? `M${col * 100 + 50} 550V950` : ''}"/>`);
@@ -37,9 +50,10 @@ for (let i = 0; i < 90; i++) {
 }
 function result() { const key = game.positions.at(-1); return outcome(game.board, game.side, game.positions.filter(p => p === key).length); }
 function sideName(side) { return side === 'red' ? '红方' : '黑方'; }
+function undoTarget() { return state.mode === 'local' ? state.moves.length - 1 : game.records.findLastIndex(record => record.side === state.humanSide); }
 function render() {
   const end = result(), checked = inCheck(game.board, game.side), last = state.moves.at(-1);
-  const humanTurn = state.mode === 'local' || game.side === 'red';
+  const humanTurn = state.mode === 'local' || game.side === state.humanSide;
   for (let i = 0; i < 90; i++) {
     const visual = flipped ? 89 - i : i, piece = game.board[i], square = squares[i];
     square.style.left = ((visual % 9 + .5) / 9 * 100) + '%'; square.style.top = ((Math.floor(visual / 9) + .5) / 10 * 100) + '%';
@@ -53,15 +67,15 @@ function render() {
   $('round-label').textContent = `第 ${Math.floor(state.moves.length / 2) + 1} 回合`;
   $('turn-piece').textContent = end ? (end.winner === null ? '和' : end.winner === 'red' ? '帅' : '将') : game.side === 'red' ? '帅' : '将';
   $('turn-piece').classList.toggle('black', (end?.winner ?? game.side) === 'black');
-  $('game-status').textContent = end ? end.winner ? sideName(end.winner) + '获胜' : '握手言和' : !ready ? '恢复棋局中' : thinking ? '黑方思考中' : checked ? sideName(game.side) + '被将军' : state.moves.length === 0 ? '红方先行' : sideName(game.side) + '行棋';
+  $('game-status').textContent = end ? end.winner ? sideName(end.winner) + '获胜' : '握手言和' : !ready ? '恢复棋局中' : thinking ? sideName(game.side) + '思考中' : checked ? sideName(game.side) + '被将军' : state.moves.length === 0 ? '红方先行' : sideName(game.side) + '行棋';
   $('game-detail').textContent = end ? end.reason + ' · 再来一局？' : !ready ? '正在读取已保存的进度…' : checked ? '请应将，保护好你的将帅。' : thinking ? '棋逢对手，静待好棋。' : state.moves.length === 0 ? '点选红方棋子，开始这盘棋。' : humanTurn ? '选择棋子，绿色标记为合法落点。' : '电脑正在选择下一步。';
   for (const [position, side] of [['top', flipped ? 'red' : 'black'], ['bottom', flipped ? 'black' : 'red']]) {
     const avatar = $(position + '-name').closest('.player-identity').querySelector('.player-avatar');
     avatar.textContent = side === 'red' ? '帅' : '将'; avatar.className = 'player-avatar ' + side + '-avatar';
-    $(position + '-name').textContent = state.mode === 'ai' ? side === 'red' ? '我方棋手' : '电脑棋手' : sideName(side) + '棋手';
+    $(position + '-name').textContent = state.mode === 'ai' ? side === state.humanSide ? '我方棋手' : '电脑棋手' : sideName(side) + '棋手';
     $(position + '-description').textContent = sideName(side) + ' · ' + (side === 'red' ? '先手' : '后手');
     const active = !end && game.side === side;
-    $(position + '-turn').textContent = end ? '对局结束' : active ? side === 'black' && thinking ? '思考中…' : '正在行棋' : '等待落子';
+    $(position + '-turn').textContent = end ? '对局结束' : active ? thinking ? '思考中…' : '正在行棋' : '等待落子';
     $(position + '-turn').classList.toggle('active', active);
   }
   // Derive captures from the current replay, so undo, imports and cloud restores
@@ -86,9 +100,11 @@ function render() {
   $('mode-ai').classList.toggle('selected', state.mode === 'ai'); $('mode-ai').setAttribute('aria-pressed', state.mode === 'ai');
   $('mode-local').classList.toggle('selected', state.mode === 'local'); $('mode-local').setAttribute('aria-pressed', state.mode === 'local');
   $('difficulty-row').hidden = state.mode !== 'ai'; $('difficulty').value = state.difficulty;
-  $('undo').disabled = !ready || !state.moves.length || Boolean(sync.conflict);
+  $('human-side-row').hidden = state.mode !== 'ai'; $('human-side').value = state.humanSide;
+  $('human-side').disabled = !ready || Boolean(sync.conflict);
+  $('undo').disabled = !ready || undoTarget() < 0 || Boolean(sync.conflict);
   $('undo-board').disabled = $('undo').disabled;
-  const undoHint = state.mode === 'ai' ? game.side === 'black' ? '撤回刚走的一步，并取消电脑落子' : '人机悔棋撤回双方最近一轮' : '双人悔棋撤回最近一步';
+  const undoHint = state.mode === 'ai' ? undoTarget() < 0 ? '你落子后即可悔棋' : game.side !== state.humanSide ? '撤回刚走的一步，并取消电脑落子' : '人机悔棋撤回双方最近一轮' : '双人悔棋撤回最近一步';
   $('undo').title = $('undo-board').title = undoHint; $('undo-hint').textContent = undoHint;
   $('new-game').disabled = !ready || Boolean(sync.conflict);
   $('move-count').textContent = state.moves.length + ' 手';
@@ -107,7 +123,7 @@ function render() {
 function selectSquare(index) {
   if (!ready || sync.conflict) return;
   if (result()) { toast('对局已结束，可以开始新对局'); return; }
-  if (thinking || (state.mode === 'ai' && game.side === 'black')) return;
+  if (thinking || (state.mode === 'ai' && game.side !== state.humanSide)) return;
   if (selected !== null && targets.includes(index)) { move({ from: selected, to: index }); return; }
   if (game.board[index]?.side === game.side) {
     selected = selected === index ? null : index;
@@ -117,7 +133,7 @@ function selectSquare(index) {
   } else { selected = null; targets = []; render(); }
 }
 function commit(next) {
-  cancelAI(); state = { ...next, updatedAt: new Date().toISOString() }; game = replay(state.moves); selected = null; targets = [];
+  cancelAI(); orientFor(next, state); state = { ...next, updatedAt: new Date().toISOString() }; game = replay(state.moves); selected = null; targets = [];
   sync.save(state); render(); maybeAI();
 }
 function move(value) {
@@ -129,13 +145,13 @@ function move(value) {
 }
 function cancelAI() { generation++; clearTimeout(aiTimer); worker?.terminate(); worker = null; thinking = false; }
 function maybeAI() {
-  if (!ready || thinking || sync.conflict || state.mode !== 'ai' || game.side !== 'black' || result()) return;
+  if (!ready || thinking || sync.conflict || state.mode !== 'ai' || game.side === state.humanSide || result()) return;
   thinking = true; render(); const id = generation;
   aiTimer = setTimeout(() => {
     if (generation !== id) return;
     const fallback = () => {
       if (generation !== id) return;
-      const candidate = legalMoves(game.board, 'black')[0];
+      const candidate = legalMoves(game.board, game.side)[0];
       worker?.terminate(); worker = null; thinking = false;
       if (candidate) { toast('电脑已使用备用着法'); move(candidate); } else render();
     };
@@ -161,18 +177,26 @@ async function confirmAction(title, message, action = '确认') {
 async function changeMode(mode) {
   if (!ready || sync.conflict || mode === state.mode) return;
   if (state.moves.length && !await confirmAction('切换对弈模式？', '切换模式将开始新对局，并同步到其他设备。当前棋局可先导出备份。', '切换并开局')) return;
-  commit(freshState(mode, state.difficulty));
+  commit(freshState(mode, state.difficulty, state.humanSide));
 }
 $('mode-ai').onclick = () => changeMode('ai'); $('mode-local').onclick = () => changeMode('local');
+$('human-side').onchange = async () => {
+  const humanSide = $('human-side').value;
+  if (!ready || sync.conflict || humanSide === state.humanSide) { render(); return; }
+  render();
+  if (state.moves.length && !await confirmAction('更换执棋方并开局？', `你将执${humanSide === 'red' ? '红棋先行' : '黑棋，电脑执红先行'}。当前棋局会被替换并同步，可先导出备份。`, '换边并开局')) { render(); return; }
+  if (sync.conflict) return;
+  commit(freshState('ai', state.difficulty, humanSide));
+};
 $('difficulty').onchange = () => { if (ready && !sync.conflict) commit({ ...state, difficulty: $('difficulty').value }); else render(); };
-$('new-game').onclick = async () => { if (await confirmAction('开始一盘新棋？', '当前棋局会被替换，并同步到其他设备。你可以先导出棋局留作备份。', '开始新局')) commit(freshState(state.mode, state.difficulty)); };
+$('new-game').onclick = async () => { if (await confirmAction('开始一盘新棋？', '当前棋局会被替换，并同步到其他设备。你可以先导出棋局留作备份。', '开始新局')) commit(freshState(state.mode, state.difficulty, state.humanSide)); };
 function undoMove() {
-  if (!ready || sync.conflict || !state.moves.length) return;
-  const count = state.mode === 'ai' && game.side === 'red' ? 2 : 1;
-  commit({ ...state, moves: state.moves.slice(0, Math.max(0, state.moves.length - count)) }); toast('已悔棋');
+  const target = undoTarget();
+  if (!ready || sync.conflict || target < 0) return;
+  commit({ ...state, moves: state.moves.slice(0, target) }); toast('已悔棋');
 }
 $('undo').onclick = undoMove; $('undo-board').onclick = undoMove;
-$('flip').onclick = () => { flipped = !flipped; try { localStorage.setItem('yijian.flip', String(flipped)); } catch {} render(); };
+$('flip').onclick = () => { flipped = !flipped; saveOrientation(); render(); };
 $('help-open').onclick = () => $('help-dialog').showModal();
 for (const button of document.querySelectorAll('[data-close]')) button.onclick = () => $(button.dataset.close).close();
 function openSync() { $('sync-code').value = sync.data.code; $('join-error').textContent = ''; $('sync-dialog').showModal(); }
@@ -212,6 +236,6 @@ if (sync.recovered && state.moves.length) toast('已续上你的上一次棋局'
 if (document.modelContext?.registerTool) {
   try {
     await document.modelContext.registerTool({ name: 'xiangqi_get_position', description: '读取当前象棋局面及合法着法，不包含同步码。', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true }, execute: () => ({ board: game.board, side: game.side, moves: legalMoves(game.board, game.side), outcome: result() }) });
-    await document.modelContext.registerTool({ name: 'xiangqi_play_move', description: '走一步合法棋，并保存当前棋局。坐标为从上往下、从左往右的 0–89 索引。', inputSchema: { type: 'object', properties: { from: { type: 'integer', minimum: 0, maximum: 89 }, to: { type: 'integer', minimum: 0, maximum: 89 } }, required: ['from', 'to'], additionalProperties: false }, execute: input => { if (!Number.isInteger(input?.from) || !Number.isInteger(input?.to) || thinking || (state.mode === 'ai' && game.side !== 'red') || !move({ from: input.from, to: input.to })) throw new Error('当前无法执行此着法'); return { side: game.side, moveCount: state.moves.length }; } });
+    await document.modelContext.registerTool({ name: 'xiangqi_play_move', description: '走一步合法棋，并保存当前棋局。坐标为从上往下、从左往右的 0–89 索引。', inputSchema: { type: 'object', properties: { from: { type: 'integer', minimum: 0, maximum: 89 }, to: { type: 'integer', minimum: 0, maximum: 89 } }, required: ['from', 'to'], additionalProperties: false }, execute: input => { if (!Number.isInteger(input?.from) || !Number.isInteger(input?.to) || thinking || (state.mode === 'ai' && game.side !== state.humanSide) || !move({ from: input.from, to: input.to })) throw new Error('当前无法执行此着法'); return { side: game.side, moveCount: state.moves.length }; } });
   } catch { /* Regular browsers do not require WebMCP. */ }
 }

@@ -78,6 +78,8 @@ test('invalid moves, malformed state and invalid revisions are rejected before a
     { state: { ...freshState(), moves: [{ from: 27, to: 36 }] }, baseRevision: 0 },
     { state: { ...freshState(), moves: [{ from: 54, to: 55 }] }, baseRevision: 0 },
     { state: { ...freshState(), version: 99 }, baseRevision: 0 },
+    { state: { ...freshState(), humanSide: 'white' }, baseRevision: 0 },
+    { state: { ...freshState(), humanSide: null }, baseRevision: 0 },
     { state: freshState(), baseRevision: -1 },
     { state: freshState(), baseRevision: 0.5 },
     { state: freshState(), baseRevision: Number.MAX_SAFE_INTEGER + 1 },
@@ -85,6 +87,26 @@ test('invalid moves, malformed state and invalid revisions are rejected before a
   for (const value of invalid) assert.equal((await perform({ method: 'PUT', body: JSON.stringify(value) })).status, 400);
   assert.equal((await perform({ method: 'PUT', body: '{broken' })).status, 400);
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM games').get().count, 0);
+});
+
+test('cloud preserves human black across saves and reads', async () => {
+  const state = { ...played(), humanSide: 'black' };
+  assert.equal((await perform({ method: 'PUT', state })).status, 200);
+  const loaded = await (await perform()).json();
+  assert.equal(loaded.state.humanSide, 'black');
+  assert.deepEqual(loaded.state.moves, state.moves);
+  const updated = { ...state, difficulty: 'hard' };
+  assert.equal((await perform({ method: 'PUT', state: updated, baseRevision: 1 })).status, 200);
+  assert.equal((await (await perform()).json()).state.humanSide, 'black');
+});
+
+test('cloud accepts an old save without humanSide and normalizes it to human red', async () => {
+  const legacy = played();
+  delete legacy.humanSide;
+  assert.equal((await perform({ method: 'PUT', state: legacy })).status, 200);
+  const loaded = await (await perform()).json();
+  assert.equal(loaded.state.humanSide, 'red');
+  assert.deepEqual(loaded.state.moves, legacy.moves);
 });
 
 test('compare-and-swap refuses a stale revision without overwriting the winning update', async () => {
