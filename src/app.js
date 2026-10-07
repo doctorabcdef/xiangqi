@@ -1,6 +1,7 @@
 import { label, legalMoves, inCheck, outcome, replay } from './engine.js';
 import { freshState, validateState } from './state.js';
 import { GameSync } from './sync.js?v=20261007-live';
+import { mountChat } from './chat.js';
 const $ = id => document.getElementById(id);
 let state, game, selected = null, targets = [], flipped = false, ready = false, thinking = false, worker = null, aiTimer = null, generation = 0, toastTimer;
 function saveOrientation(next = state) {
@@ -23,6 +24,7 @@ const sync = new GameSync({
   onRemote(next) { cancelAI(); orientFor(next, state); state = next; game = replay(state.moves); selected = null; targets = []; render(); maybeAI(); },
   onConflict() { cancelAI(); if (!$('conflict-dialog').open) $('conflict-dialog').showModal(); render(); },
 });
+mountChat(() => sync.data.code);
 state = sync.data.state; orientFor(state); game = replay(state.moves);
 const grid = [];
 for (let row = 0; row < 10; row++) grid.push(`<path d="M50 ${row * 100 + 50}H850"/>`);
