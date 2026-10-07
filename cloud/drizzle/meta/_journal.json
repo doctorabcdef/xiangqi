@@ -8,6 +8,13 @@
       "when": 1790859967335,
       "tag": "0000_wide_lightspeed",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791361249556,
+      "tag": "0001_nice_red_ghost",
+      "breakpoints": true
     }
   ]
 }

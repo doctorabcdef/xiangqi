@@ -55,3 +55,22 @@
 #human-side{width:134px}
 #human-side-row{margin-bottom:14px}
 #human-side-row + .setting-row{margin-top:14px}
+
+.game-layout{grid-template-areas:"captures play sidebar" ". chat ."}
+.chat-card{grid-area:chat;width:100%;max-width:540px;justify-self:center;background:#fcfcf7;border:1px solid #dce1d1;border-radius:18px;padding:25px;color:#304036;min-width:0}
+.chat-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.chat-heading h2{font-size:21px;line-height:1.5;font-weight:500;margin:0}.chat-heading>span{font-size:11px;letter-spacing:1.5px;color:#939d87}
+.chat-description{font-size:15px;line-height:1.6;color:#949c87;margin:12px 0 20px}
+.chat-messages{height:302px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#c5cdb9 transparent;padding:4px 7px 10px 0;display:flex;flex-direction:column;gap:20px}
+.chat-empty{text-align:center;color:#a0a993;font-size:14px;margin:auto;padding:40px 0}.chat-more{display:block;margin:0 auto 12px;border:0;background:none;color:#718266;font-size:12px}
+.chat-message{max-width:88%;align-self:flex-start;min-width:0}.chat-message.mine{align-self:flex-end}.chat-meta{display:flex;gap:12px;justify-content:space-between;color:#919d82;font-size:12px;line-height:1.5;margin:0 0 6px}.chat-meta>span{overflow-wrap:anywhere}.chat-meta time{white-space:nowrap}
+.chat-bubble{background:#f0f2e9;border:1px solid #dbe2d0;border-radius:0 15px 15px 15px;padding:13px 15px;font-size:16px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.mine .chat-bubble{background:#e6eddc;border-radius:15px 0 15px 15px}
+button.chat-bubble{width:100%;display:flex;gap:12px;align-items:center;text-align:left;color:#364931;white-space:normal}.chat-play-icon{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:#cfddbd;color:#486137;font-size:18px;flex-shrink:0}.chat-voice-info{display:flex;flex-direction:column;gap:3px}.chat-voice-info small{font-size:12px;color:#7e906e}.chat-delivery{text-align:right;font-size:12px;color:#919d82;margin-top:5px}.chat-retry{background:none;border:0;padding:0;color:#a46b39;font:inherit}
+.chat-composer{margin-top:12px;padding-top:18px;border-top:1px solid #e0e5d6}.chat-quick{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}.chat-quick button{border:1px solid #dce3d0;border-radius:10px;background:#f2f5eb;padding:11px 14px;color:#62784f;font-size:16px}
+.chat-voices{display:flex;flex-direction:column;gap:10px}.chat-voices button{background:#eaf0df;border:1px solid #d0ddbd;border-radius:10px;text-align:left;padding:13px 16px;font-size:16px;line-height:1.5;color:#4e683e}.chat-voices button span{font-size:15px;margin-right:8px}.chat-voices button:hover,.chat-quick button:hover{background:#dfe9d3}
+.chat-emojis{display:flex;justify-content:space-between;margin:17px 0 22px}.chat-emojis button{background:none;border:0;font-size:28px;padding:3px 5px;border-radius:8px}.chat-emojis button:hover{background:#edf1e5}
+.chat-message:has(button.chat-bubble){width:255px}
+.chat-nickname{display:flex;align-items:center;gap:12px;color:#919f81;font-size:14px;margin-bottom:13px;white-space:nowrap}.chat-nickname input{flex:1;width:0;border:0;border-bottom:1px solid #dfe4d6;border-radius:0;background:transparent;padding:6px 3px;color:#53684b;font-size:14px;min-width:0}
+#chat-text{font:inherit;width:100%;min-height:102px;max-height:220px;resize:vertical;border:1px solid #d7e1c9;border-radius:11px;padding:15px;background:#fffffb;color:#384b33;line-height:1.6;font-size:16px}#chat-text::placeholder{color:#a2ad95}#chat-text:focus-visible{outline:2px solid #8caa78;outline-offset:2px}
+.chat-send-row{display:flex;justify-content:space-between;align-items:center;margin-top:10px;color:#919e80;font-size:13px}.chat-send-row button{border:0;border-radius:10px;background:#3b543c;color:#fffdf3;font-size:17px;padding:12px 30px}.chat-send-row button:hover{background:#2d442f}.chat-status{font-size:13px;line-height:1.6;color:#8e9c7e;margin:16px 0 0;min-height:21px}.chat-status.error{color:#a46b39}
+@media(min-width:651px) and (max-width:1000px){.game-layout{grid-template-areas:"captures play" ". sidebar" ". chat"}}
+@media(max-width:650px){.game-layout{grid-template-areas:"play" "captures" "sidebar" "chat"}.chat-card{padding:20px 18px;border-radius:15px}.chat-description{font-size:13px}.chat-messages{height:290px}.chat-message{max-width:94%}.chat-bubble{font-size:15px;padding:11px 12px}.chat-emojis button{font-size:26px;padding:3px}.chat-quick button,.chat-voices button{font-size:15px}}

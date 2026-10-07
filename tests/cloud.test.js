@@ -1,12 +1,12 @@
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import worker from '../cloud/dist/server/index.js';
 import { freshState } from '../src/state.js';
 import { serveSocket } from '../cloud/dist/server/live.js';
 
-const migration = readFileSync(new URL('../cloud/drizzle/0000_wide_lightspeed.sql', import.meta.url), 'utf8');
+const migration = readdirSync(new URL('../cloud/drizzle/', import.meta.url)).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL('../cloud/drizzle/' + name, import.meta.url), 'utf8')).join('\n');
 const tokenA = 'a'.repeat(32), tokenB = 'b'.repeat(32);
 const githubOrigin = 'https://doctorabcdef.github.io';
 let database, env, sessions;
@@ -20,6 +20,7 @@ beforeEach(() => {
       const statement = database.prepare(sql);
       return { bind(...values) { return {
         async first() { return statement.get(...values) ?? null; },
+        async all() { return { results: statement.all(...values) }; },
         async run() { const result = statement.run(...values); return { meta: { changes: Number(result.changes) } }; },
       }; } };
     },
@@ -228,4 +229,54 @@ test('live null and oversized messages close without changing saved progress', a
     assert.equal(socket.closed, 1008);
   }
   assert.equal((await (await perform()).json()).revision, 1);
+});
+
+const chatMessage = (changes = {}) => ({ id: crypto.randomUUID(), senderId: crypto.randomUUID(), nickname: '棋友', kind: 'text', content: '好棋！😀', ...changes });
+const chat = (body, query = '', token = tokenA) => worker.fetch(new Request('https://sync.example/api/chat' + query, {
+  method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, Origin: githubOrigin, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}),
+}), env);
+
+test('chat persists text and both audio clips without modifying the saved game', async () => {
+  await perform({ method: 'PUT', state: played() });
+  const before = await (await perform()).json();
+  for (const message of [chatMessage(), chatMessage({ kind: 'voice', content: 'too-slow' }), chatMessage({ kind: 'voice', content: 'hurry-up' })]) {
+    const sent = await chat(message); assert.equal(sent.status, 201);
+    assert.equal((await sent.json()).message.content, message.content);
+  }
+  const history = await (await chat()).json();
+  assert.equal(history.messages.length, 3);
+  assert.deepEqual(history.messages.map(message => message.sequence), [1, 2, 3]);
+  assert.deepEqual(await (await perform()).json(), before);
+  assert.equal((await (await chat(undefined, '', tokenB)).json()).messages.length, 0);
+});
+
+test('chat retries are idempotent and a reused message ID cannot replace a message', async () => {
+  const message = chatMessage();
+  const results = await Promise.all([chat(message), chat(message)]);
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 201]);
+  const values = await Promise.all(results.map(result => result.json()));
+  assert.equal(values[0].message.sequence, values[1].message.sequence);
+  assert.equal((await chat({ ...message, content: '更改过的消息' })).status, 409);
+  assert.equal((await (await chat()).json()).messages.length, 1);
+});
+
+test('chat cursor pagination preserves order without skipping simultaneous posts', async () => {
+  for (let i = 0; i < 60; i++) await chat(chatMessage({ content: String(i) }));
+  const newest = await (await chat()).json();
+  assert.equal(newest.messages.length, 50); assert.equal(newest.hasMore, true);
+  assert.equal(newest.messages[0].content, '10');
+  const older = await (await chat(undefined, '?before=' + newest.messages[0].sequence)).json();
+  assert.deepEqual(older.messages.map(value => value.content), Array.from({ length: 10 }, (_, i) => String(i)));
+  assert.equal(older.hasMore, false);
+  const first = await (await chat(undefined, '?after=0')).json();
+  const second = await (await chat(undefined, '?after=' + first.messages.at(-1).sequence)).json();
+  assert.deepEqual([...first.messages, ...second.messages].map(value => value.content), Array.from({ length: 60 }, (_, i) => String(i)));
+  for (const query of ['?after=-1', '?after=NaN', '?after=1&before=3', '?before=9007199254740992']) assert.equal((await chat(undefined, query)).status, 400);
+});
+
+test('chat enforces message limits and only allows the two supplied voice clips', async () => {
+  assert.equal((await chat(chatMessage({ nickname: '棋'.repeat(20), content: '😀'.repeat(250) }))).status, 201);
+  for (const change of [{ nickname: '棋'.repeat(21) }, { nickname: '  ' }, { content: 'x'.repeat(501) }, { content: ' ' }, { content: 12 }, { kind: 'html' }, { kind: 'voice', content: 'https://evil.example/audio.mp3' }, { id: 'bad' }]) assert.equal((await chat(chatMessage(change))).status, 400);
+  assert.equal((await chat(chatMessage({ content: 'x'.repeat(4200) }))).status, 413);
+  assert.equal((await chat(undefined, '', 'bad')).status, 401);
 });

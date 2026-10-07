@@ -1,15 +1,40 @@
 import { test, expect } from '@playwright/test';
 
 const CLOUD_API = 'https://yijian-xiangqi-sync.cx668899668899.chatgpt.site/api/game';
+const CHAT_API = CLOUD_API.replace('/api/game', '/api/chat');
 const STORAGE_KEY = 'yijian.xiangqi.v1';
 
 function cloudServer({ live = false } = {}) {
   const games = new Map();
+  const chats = new Map();
+  let chatSequence = 0;
   const sockets = new Set();
   let liveDisabled = false;
   const notify = code => { for (const item of sockets) if (item.code === code) item.socket.send(JSON.stringify({ type: 'snapshot', data: games.get(code) })); };
   async function attach(context) {
-    const connection = { offline: false };
+    const connection = { offline: false, chatOffline: false };
+    await context.route(CHAT_API + '**', async route => {
+      if (connection.offline || connection.chatOffline) return route.abort('internetdisconnected');
+      const request = route.request(), code = request.headers().authorization?.replace(/^Bearer /, '');
+      const headers = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization,content-type' };
+      const reply = (status, json) => route.fulfill({ status, headers, contentType: 'application/json', body: JSON.stringify(json) });
+      if (request.method() === 'OPTIONS') return reply(200, {});
+      if (!code) return reply(401, {});
+      if (!chats.has(code)) chats.set(code, []);
+      const messages = chats.get(code);
+      if (request.method() === 'POST') {
+        if (connection.chatPostDelay) await new Promise(resolve => setTimeout(resolve, connection.chatPostDelay));
+        const body = request.postDataJSON();
+        const existing = messages.find(message => message.id === body.id);
+        if (existing) return reply(200, { message: existing });
+        const message = { ...body, sequence: ++chatSequence, createdAt: new Date().toISOString() };
+        messages.push(message); return reply(201, { message });
+      }
+      const params = new URL(request.url()).searchParams;
+      const after = params.get('after'), before = params.get('before');
+      const matches = messages.filter(m => (after === null || m.sequence > +after) && (before === null || m.sequence < +before));
+      return reply(200, { messages: after === null ? matches.slice(-50) : matches.slice(0, 50), hasMore: matches.length > 50 });
+    });
     await context.routeWebSocket(CLOUD_API.replace(/^http/, 'ws').replace('/api/game', '/api/live'), socket => {
       if (!live || liveDisabled) { socket.close(); return; }
       const item = { socket, code: connection.code }; sockets.add(item);
@@ -46,7 +71,9 @@ function cloudServer({ live = false } = {}) {
     });
     return connection;
   }
-  return { games, attach, sockets, disconnectLive() { liveDisabled = true; for (const item of sockets) item.socket.close(); sockets.clear(); } };
+  return { games, chats, attach, sockets,
+    addChat(code, message) { chats.get(code).push({ ...message, sequence: ++chatSequence }); },
+    disconnectLive() { liveDisabled = true; for (const item of sockets) item.socket.close(); sockets.clear(); } };
 }
 
 async function ready(page) {
@@ -89,6 +116,137 @@ async function openSecondDevice(browser, cloud, first) {
   expect(cloud.games.get(code)).toEqual(cloudBeforeOpen);
   return { context, page, connection, code };
 }
+
+test('chat saves text, nickname, emoji and both supplied voice clips across devices and reloads', async ({ page, context, browser }) => {
+  const cloud = cloudServer(); await cloud.attach(context); await ready(page);
+  await expect(page.locator('#chat-status')).toHaveText('聊天记录已同步');
+  await page.locator('#chat-name').fill('梦辰');
+  await page.locator('#chat-text').fill('<img src=x onerror=alert(1)>你好');
+  await page.locator('.chat-emojis button').first().click();
+  await page.locator('#chat-send').click();
+  await expect(page.locator('#chat-status')).toHaveText('消息已发送');
+  await expect(page.locator('#chat-messages img')).toHaveCount(0);
+  await expect(page.locator('.chat-bubble').first()).toContainText('<img src=x onerror=alert(1)>你好😀');
+  const audioRequests = [];
+  page.on('request', request => { if (request.url().includes('/assets/voices/')) audioRequests.push(request.url()); });
+  await page.locator('[data-chat-voice="too-slow"]').click();
+  await expect(page.locator('.chat-delivery').last()).toHaveText('已发送');
+  await expect.poll(() => audioRequests.some(url => url.endsWith('/too-slow.m4a'))).toBe(true);
+  await page.locator('[data-chat-voice="hurry-up"]').click();
+  await expect(page.locator('.chat-delivery').last()).toHaveText('已发送');
+  await expect.poll(() => audioRequests.some(url => url.endsWith('/hurry-up.m4a'))).toBe(true);
+  await page.locator('[data-chat-text="太慢了"]').click();
+  await expect(page.locator('.chat-delivery').last()).toHaveText('已发送');
+  await page.reload();
+  await expect(page.locator('#chat-name')).toHaveValue('梦辰');
+  await expect(page.locator('.chat-message')).toHaveCount(4);
+  await expect(page.locator('[data-chat-play][data-clip="too-slow"]')).toContainText('太慢了太慢了');
+  await expect(page.locator('[data-chat-play][data-clip="hurry-up"]')).toContainText('搞快点好不');
+  const second = await openSecondDevice(browser, cloud, page);
+  try {
+    await expect(second.page.locator('.chat-message')).toHaveCount(4);
+    await expect(second.page.locator('.chat-message.mine')).toHaveCount(0);
+    await second.page.locator('[data-chat-play][data-clip="too-slow"]').click();
+    await expect(second.page.locator('#chat-status')).not.toHaveText(/无法播放/);
+    await page.locator('.chat-card').screenshot({ path: 'artifacts/chat-desktop.png' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('.chat-card').screenshot({ path: 'artifacts/chat-mobile.png' });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.setViewportSize({ width: 320, height: 700 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  } finally { await second.context.close(); }
+});
+
+test('offline chat survives refresh and retries once while the game remains playable', async ({ page, context }) => {
+  const cloud = cloudServer(), connection = await cloud.attach(context); await ready(page);
+  await expect(page.locator('#chat-status')).toHaveText('聊天记录已同步');
+  connection.chatOffline = true;
+  await page.locator('#chat-text').fill('稍等我一下'); await page.locator('#chat-send').click();
+  await expect(page.locator('.chat-retry')).toHaveText('未发送 · 点击重试');
+  await page.locator('#mode-local').click(); await move(page, 54, 45); await saved(page);
+  await page.reload();
+  await expect(page.locator('.chat-bubble')).toHaveText('稍等我一下');
+  await expect(page.locator('.chat-retry')).toBeVisible();
+  await expect(page.locator('#move-count')).toHaveText('1 手');
+  connection.chatOffline = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(page.locator('.chat-delivery')).toHaveText('已发送');
+  await page.reload();
+  await expect(page.locator('.chat-message')).toHaveCount(1);
+  const code = (await snapshot(page)).code;
+  expect(cloud.chats.get(code)).toHaveLength(1);
+});
+
+test('a second tab cannot overwrite another tab queued chat messages', async ({ page, context }) => {
+  const cloud = cloudServer(), connection = await cloud.attach(context); await ready(page);
+  const other = await context.newPage(); await ready(other);
+  connection.chatOffline = true;
+  await page.locator('#chat-text').fill('多标签页也别丢失'); await page.locator('#chat-send').click();
+  await expect(page.locator('.chat-retry')).toBeVisible();
+  // A second tab attempts both a refresh and retry while offline, then the
+  // sender closes. Its outbox must survive the other tab's persistence.
+  await other.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(other.locator('.chat-retry')).toBeVisible();
+  await page.close();
+  connection.chatOffline = false;
+  await other.reload();
+  await expect(other.locator('.chat-delivery')).toHaveText('已发送');
+  await expect(other.locator('.chat-bubble')).toHaveText('多标签页也别丢失');
+  const code = (await snapshot(other)).code;
+  expect(cloud.chats.get(code)).toHaveLength(1);
+  expect(await other.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('yijian.chat.outbox.')))).toHaveLength(0);
+  await other.close();
+});
+
+test('a send acknowledgement does not skip another visitor message since the last read', async ({ page, context }) => {
+  const cloud = cloudServer(); await cloud.attach(context); await ready(page);
+  await expect(page.locator('#chat-status')).toHaveText('聊天记录已同步');
+  const code = (await snapshot(page)).code;
+  // Put a message ahead of the read cursor, then acknowledge our send at a
+  // higher sequence. The next incremental read must still fetch both.
+  cloud.addChat(code, { id: '12345678-1234-4234-8234-123456789abc', senderId: '87654321-1234-4234-8234-123456789abc', nickname: '另一位棋友', kind: 'text', content: '别漏掉这条', createdAt: new Date().toISOString() });
+  await page.locator('#chat-text').fill('我也发一条'); await page.locator('#chat-send').click();
+  await expect(page.locator('#chat-status')).toHaveText('消息已发送');
+  await expect(page.locator('.chat-message')).toHaveCount(2);
+  await expect(page.locator('#chat-messages')).toContainText('别漏掉这条');
+});
+
+test('loading older chat bridges the gap between an old cache and the newest cloud page', async ({ page, context }) => {
+  const cloud = cloudServer(); await cloud.attach(context); await ready(page);
+  await page.locator('#chat-text').fill('旧缓存'); await page.locator('#chat-send').click();
+  await expect(page.locator('#chat-status')).toHaveText('消息已发送');
+  const code = (await snapshot(page)).code;
+  for (let index = 0; index < 60; index++) cloud.addChat(code, {
+    id: `12345678-1234-4234-8234-${String(index).padStart(12, '0')}`,
+    senderId: '87654321-1234-4234-8234-123456789abc', nickname: '棋友', kind: 'text', content: '新消息 ' + index, createdAt: new Date().toISOString(),
+  });
+  await page.reload();
+  await expect(page.locator('#chat-status')).toHaveText('聊天记录已同步');
+  await expect(page.locator('.chat-message')).toHaveCount(50);
+  await page.locator('#chat-more').click();
+  await expect(page.locator('.chat-message')).toHaveCount(61);
+  await expect(page.locator('#chat-more')).toBeHidden();
+  await expect(page.locator('.chat-bubble').first()).toHaveText('旧缓存');
+});
+
+test('an old offline send acknowledgement does not move the history pagination boundary', async ({ page, context }) => {
+  const cloud = cloudServer(), connection = await cloud.attach(context); await ready(page);
+  const code = (await snapshot(page)).code;
+  for (let index = 0; index < 150; index++) cloud.addChat(code, {
+    id: `12345678-1234-4234-8234-${String(index).padStart(12, '0')}`,
+    senderId: '87654321-1234-4234-8234-123456789abc', nickname: '棋友', kind: 'text', content: '历史 ' + index, createdAt: new Date().toISOString(),
+  });
+  await page.evaluate(({ code, message }) => localStorage.setItem('yijian.chat.outbox.' + code + '.' + message.id, JSON.stringify(message)), { code, message: cloud.chats.get(code)[9] });
+  connection.chatPostDelay = 800;
+  await page.reload();
+  await expect(page.locator('#chat-status')).toHaveText('消息已发送');
+  await expect(page.locator('.chat-message')).toHaveCount(51);
+  await page.locator('#chat-more').click();
+  await expect(page.locator('.chat-message')).toHaveCount(101);
+  await page.locator('#chat-more').click();
+  await expect(page.locator('.chat-message')).toHaveCount(150);
+  await expect(page.locator('#chat-more')).toBeHidden();
+});
 
 test('another device receives moves and undo automatically without refresh or focus events', async ({ page, context, browser }) => {
   const cloud = cloudServer();

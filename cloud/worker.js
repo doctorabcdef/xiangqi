@@ -1,24 +1,26 @@
 import { gameStore } from './store.js';
 import { serveSocket } from './live.js';
+import { chatRequest } from './chat.js';
 const allowed = new Set(['https://doctorabcdef.github.io', 'http://127.0.0.1:4173', 'http://localhost:4173']);
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin');
     const ownOrigin = new URL(request.url).origin;
-    const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Vary': 'Origin', 'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Max-Age': '86400' };
+    const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Vary': 'Origin', 'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Max-Age': '86400' };
     if (origin && (allowed.has(origin) || origin === ownOrigin)) headers['Access-Control-Allow-Origin'] = origin;
     const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers });
     if (origin && !headers['Access-Control-Allow-Origin']) return json({ error: '来源不允许' }, 403);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
     if (new URL(request.url).pathname === '/api/health') return json({ ok: true, service: 'yijian-xiangqi-sync' });
     const path = new URL(request.url).pathname, live = path === '/api/live';
-    if (path !== '/api/game' && !live) return json({ service: '弈间象棋云同步', website: 'https://doctorabcdef.github.io/xiangqi/' });
+    if (path !== '/api/game' && path !== '/api/chat' && !live) return json({ service: '弈间象棋云同步', website: 'https://doctorabcdef.github.io/xiangqi/' });
     const protocols = request.headers.get('Sec-WebSocket-Protocol')?.split(',').map(value => value.trim()) ?? [];
     const token = live ? protocols.find(value => /^room\.[A-Za-z0-9_-]{32}$/.test(value))?.slice(5) : request.headers.get('Authorization')?.match(/^Bearer ([A-Za-z0-9_-]{32})$/)?.[1];
     if (!token) return json({ error: '需要有效的同步码' }, 401);
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
     const id = Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('');
     try {
+      if (path === '/api/chat') return await chatRequest(request, env, id, json);
       if (live) {
         if (request.method !== 'GET' || request.headers.get('Upgrade')?.toLowerCase() !== 'websocket' || !protocols.includes('xiangqi-v1')) return json({ error: '需要实时连接' }, 426);
         const [client, server] = Object.values(new WebSocketPair());
