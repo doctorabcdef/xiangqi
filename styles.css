@@ -7,8 +7,9 @@
 .copy-row button{white-space:nowrap;flex-shrink:0}
 
 /* Captured pieces retain the board's .piece face, ring and side color. */
-.game-layout{max-width:1280px;grid-template-columns:152px minmax(0,1fr) 300px;gap:24px;grid-template-areas:"captures play sidebar"}
+.game-layout{max-width:1600px;grid-template-columns:128px minmax(0,1fr) 280px 300px;gap:20px;grid-template-areas:"captures play sidebar chat"}
 .play-area{grid-area:play}.sidebar{grid-area:sidebar;min-width:0}
+@media(min-width:1200px){.board .piece{font-size:clamp(25px,calc(7vw - 59px),36px)}}
 .captures-sidebar{grid-area:captures;display:flex;flex-direction:column;gap:18px;padding-top:57px;min-width:0}
 .capture-card{background:#fafbf5;border:1px solid #d6ddcf;border-radius:7px;padding:17px 12px 18px;min-height:202px}
 .capture-heading{display:flex;align-items:center;justify-content:space-between;gap:5px}
@@ -26,22 +27,26 @@
 .undo-quick{padding:7px 12px;border:1px solid #b6c6ae;border-radius:5px;background:#edf2e6;color:var(--green);font-weight:600}
 .undo-quick:not(:disabled):hover{background:#dfe9d6}
 .undo-hint{font-size:12px;line-height:1.6;color:#889580;margin:11px 0 0}
-@media(min-width:1050px) and (max-height:900px){
-  .game-layout{max-width:1150px;grid-template-columns:138px minmax(0,1fr) 280px;gap:22px}
+@media(min-width:1200px) and (max-height:900px){
+  .game-layout{max-width:1500px}
   .captures-sidebar{padding-top:51px}
   .capture-card{padding:15px 10px}
   .capture-heading h2{font-size:15px}
   .captured-piece{font-size:28px}
 }
-@media(min-width:651px) and (max-width:1000px){
-  .game-layout{max-width:800px;grid-template-columns:132px minmax(0,1fr);grid-template-areas:"captures play" ". sidebar";gap:24px 20px}
+@media(min-width:901px) and (max-width:1199px){
+  .game-layout{max-width:1100px;grid-template-columns:132px minmax(0,1fr) minmax(0,1fr);grid-template-areas:"captures play play" ". sidebar chat"}
+  .sidebar{padding-top:0}
+}
+@media(min-width:651px) and (max-width:900px){
+  .game-layout{max-width:800px;grid-template-columns:132px minmax(0,1fr);grid-template-areas:"captures play" ". sidebar" ". chat";gap:24px 20px}
   .sidebar{padding-top:0}
   .captured-piece{font-size:27px}
   .capture-heading h2{font-size:14px}
   .capture-card{padding:15px 10px}
 }
 @media(max-width:650px){
-  .game-layout{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"play" "captures" "sidebar";gap:20px}
+  .game-layout{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"play" "captures" "sidebar" "chat";gap:20px}
   .captures-sidebar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:0;width:100%;max-width:540px;margin:auto}
   .capture-card{min-height:156px;padding:14px 11px 16px}
   .capture-heading h2{font-size:15px}
@@ -56,7 +61,7 @@
 #human-side-row{margin-bottom:14px}
 #human-side-row + .setting-row{margin-top:14px}
 
-.chat-card{width:100%;background:#fcfcf7;border:1px solid #dce1d1;border-radius:18px;padding:20px 18px;color:#304036;min-width:0}
+.chat-card{grid-area:chat;width:100%;margin-top:2px;background:#fcfcf7;border:1px solid #dce1d1;border-radius:18px;padding:20px 18px;color:#304036;min-width:0}
 .chat-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.chat-heading h2{font-size:21px;line-height:1.5;font-weight:500;margin:0}.chat-heading>span{font-size:11px;letter-spacing:1.5px;color:#939d87}
 .chat-description{font-size:15px;line-height:1.6;color:#949c87;margin:12px 0 20px}
 .chat-messages{height:302px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#c5cdb9 transparent;padding:4px 7px 10px 0;display:flex;flex-direction:column;gap:20px}
@@ -71,4 +76,5 @@ button.chat-bubble{width:100%;display:flex;gap:12px;align-items:center;text-alig
 .chat-nickname{display:flex;align-items:center;gap:12px;color:#919f81;font-size:14px;margin-bottom:13px;white-space:nowrap}.chat-nickname input{flex:1;width:0;border:0;border-bottom:1px solid #dfe4d6;border-radius:0;background:transparent;padding:6px 3px;color:#53684b;font-size:14px;min-width:0}
 #chat-text{font:inherit;width:100%;min-height:102px;max-height:220px;resize:vertical;border:1px solid #d7e1c9;border-radius:11px;padding:15px;background:#fffffb;color:#384b33;line-height:1.6;font-size:16px}#chat-text::placeholder{color:#a2ad95}#chat-text:focus-visible{outline:2px solid #8caa78;outline-offset:2px}
 .chat-send-row{display:flex;justify-content:space-between;align-items:center;margin-top:10px;color:#919e80;font-size:13px}.chat-send-row button{border:0;border-radius:10px;background:#3b543c;color:#fffdf3;font-size:17px;padding:12px 30px}.chat-send-row button:hover{background:#2d442f}.chat-status{font-size:13px;line-height:1.6;color:#8e9c7e;margin:16px 0 0;min-height:21px}.chat-status.error{color:#a46b39}
-@media(max-width:650px){.chat-card{border-radius:15px}.chat-description{font-size:13px}.chat-messages{height:290px}.chat-message{max-width:94%}.chat-bubble{font-size:15px;padding:11px 12px}.chat-emojis button{font-size:26px;padding:3px}.chat-quick button,.chat-voices button{font-size:15px}}
+@media(max-width:1199px){.chat-card{margin-top:0}}
+@media(max-width:650px){.chat-card{max-width:540px;justify-self:center;border-radius:15px}.chat-description{font-size:13px}.chat-messages{height:290px}.chat-message{max-width:94%}.chat-bubble{font-size:15px;padding:11px 12px}.chat-emojis button{font-size:26px;padding:3px}.chat-quick button,.chat-voices button{font-size:15px}}
