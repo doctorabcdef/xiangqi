@@ -7,7 +7,7 @@
   <meta name="description" content="弈间中国象棋。人机对弈、本地双人、自动保存与跨设备续局，让每一盘好棋继续。">
   <title>弈间 · 中国象棋</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=20261007-chat">
+  <link rel="stylesheet" href="./styles.css?v=20261007-chat-sidebar">
   <script type="module" src="./src/app.js?v=20261007-chat"></script>
 </head>
 <body>
@@ -37,7 +37,7 @@
       <div class="player-bar bottom-player"><div class="player-identity"><span class="player-avatar red-avatar">帅</span><div><strong id="bottom-name">我方棋手</strong><span id="bottom-description">红方 · 先手</span></div></div><span class="turn-badge active" id="bottom-turn">轮到你了</span></div>
       <div class="board-toolbar"><button id="undo-board" class="tool-button undo-quick" aria-describedby="undo-hint" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5-5 5 5 5M4 10h10a5 5 0 0 1 0 10h-3"/></svg>悔棋</button><button id="flip" class="tool-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9a7 7 0 0 1 12-4l2 2M19 3v4h-4M19 15A7 7 0 0 1 7 19l-2-2M5 21v-4h4"/></svg>翻转棋盘</button><span class="board-hint">点选棋子，再点落点</span></div>
     </section>
-    <aside class="sidebar" aria-label="对局设置与棋谱">
+    <aside class="sidebar" aria-label="对局设置、棋谱与聊天">
       <section class="status-card">
         <div class="eyebrow">当前对局 <span id="round-label">第 1 回合</span></div>
         <div class="status-heading"><span id="turn-piece" class="turn-piece">帅</span><div><h1 id="game-status">红方先行</h1><p id="game-detail">落子无悔，亦可从容再来。</p></div></div>
@@ -47,8 +47,6 @@
         <div class="game-actions"><button id="undo" class="secondary-button undo-button" aria-describedby="undo-hint" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5-5 5 5 5M4 10h10a5 5 0 0 1 0 10h-3"/></svg>悔棋</button><button id="new-game" class="primary-button">开始新对局</button></div><p id="undo-hint" class="undo-hint">人机悔棋撤回一轮</p>
       </section>
       <section class="moves-card"><div class="card-title"><h2>对局棋谱</h2><span id="move-count">0 手</span></div><div class="moves-columns"><span>回合</span><span>红方</span><span>黑方</span></div><div id="move-list" class="move-list" aria-label="走子记录"><div class="empty-moves"><span>棋</span><p>方寸棋盘，静候开局</p><small>落子后将在这里记录棋谱</small></div></div><div class="record-actions"><button id="export-game">导出棋局</button><span>·</span><button id="import-game">导入棋局</button><input type="file" id="import-file" accept="application/json,.json" hidden></div></section>
-      <button class="sync-card" id="sync-card"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="12" height="9" rx="1"/><path d="M6 17h5M9 13v4"/><rect x="15" y="10" width="6" height="11" rx="1"/></svg><span><strong>换个设备，接着下</strong><small>同一网址，自动接续同一盘棋</small></span><span class="sync-plus">＋</span></button>
-    </aside>
     <section class="chat-card" aria-labelledby="chat-title">
       <div class="chat-heading"><h2 id="chat-title">棋间聊两句</h2><span>CHAT</span></div>
       <p class="chat-description">历史消息自动保存，所有访客可见。</p>
@@ -64,6 +62,8 @@
         <p id="chat-status" class="chat-status" role="status">正在读取聊天记录…</p>
       </form>
     </section>
+      <button class="sync-card" id="sync-card"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="12" height="9" rx="1"/><path d="M6 17h5M9 13v4"/><rect x="15" y="10" width="6" height="11" rx="1"/></svg><span><strong>换个设备，接着下</strong><small>同一网址，自动接续同一盘棋</small></span><span class="sync-plus">＋</span></button>
+    </aside>
   </main>
   <footer class="site-footer"><span>弈间 <span class="footer-dot">·</span> 一局一世界</span><span>红先黑后，棋逢对手</span></footer>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
