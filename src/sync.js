@@ -1,5 +1,6 @@
 import { freshState, validateState } from './state.js';
 import { CLOUD_URL, DEFAULT_ROOM_CODE } from './config.js';
+import { LiveConnection } from './live.js';
 export const STORAGE_KEY = 'yijian.xiangqi.v1';
 export const POLL_INTERVAL_MS = 250;
 const codePattern = /^[A-Za-z0-9_-]{32}$/;
@@ -10,6 +11,7 @@ export class GameSync {
     this.onRemote = onRemote; this.onStatus = onStatus; this.onConflict = onConflict;
     this.busy = false; this.conflict = null; this.generation = 0; this.localWritable = true;
     this.readController = null; this.failures = 0; this.nextPollAt = 0;
+    this.live = null; this.queuedRemote = null;
     this.data = { code: DEFAULT_ROOM_CODE, revision: 0, pending: false, state: freshState() };
     this.recovered = false; this.storageError = false;
     try {
@@ -28,7 +30,7 @@ export class GameSync {
       if (!loaded && this.storageError) this.onStatus('error', '本机存档损坏，可用同步码恢复');
     } catch { this.localWritable = false; }
   }
-  status(kind, message) { this.onStatus(kind, message + (!this.localWritable ? ' · 本机无法保存，请保管同步码' : '')); }
+  status(kind, message) { this.onStatus(kind, message + (kind === 'saved' && this.live?.ready ? ' · 实时连接' : '') + (!this.localWritable ? ' · 本机无法保存，请保管同步码' : '')); }
   persist() {
     try {
       const old = localStorage.getItem(STORAGE_KEY);
@@ -39,6 +41,17 @@ export class GameSync {
   }
   async request(code, method = 'GET', body, signal) {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new Error('当前处于离线状态');
+    if (this.live?.ready && this.live.code === code) {
+      let result;
+      try { result = await this.live.request(method, body, signal); }
+      catch (error) { if (signal?.aborted) throw error; /* Retry identical CAS payload over HTTP. */ }
+      if (result) {
+        if (result.status === 404) return null;
+        if (result.status === 409) return { conflict: true, ...result.data };
+        if (result.status !== 200) throw new Error(result.data?.error ?? '同步失败');
+        return result.data;
+      }
+    }
     const timeout = AbortSignal.timeout(20000);
     const response = await fetch(CLOUD_URL + '/api/game', { method, headers: { Authorization: `Bearer ${code}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: signal ? AbortSignal.any([signal, timeout]) : timeout, cache: 'no-store', credentials: 'omit' });
     if (response.status === 404) return null;
@@ -51,9 +64,16 @@ export class GameSync {
   async start() {
     this.persist();
     await this.flush();
-    this.timer = setInterval(() => { if (!document.hidden && Date.now() >= this.nextPollAt) this.flush({ quiet: true }); }, POLL_INTERVAL_MS);
-    window.addEventListener('online', () => this.flush());
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.flush(); });
+    if (typeof window.WebSocket === 'function') {
+      this.live = new LiveConnection((remote, code) => { if (code === this.data.code) this.receiveRemote(remote); }, window.WebSocket);
+      if (!document.hidden) this.live.start(this.data.code);
+    }
+    this.timer = setInterval(() => { if (!document.hidden && (!this.live?.ready || this.data.pending) && Date.now() >= this.nextPollAt) this.flush({ quiet: true }); }, POLL_INTERVAL_MS);
+    window.addEventListener('online', () => { if (!document.hidden) this.live?.start(this.data.code); this.flush(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.live?.stop();
+      else { this.live?.start(this.data.code); this.flush(); }
+    });
   }
   save(state) {
     this.data.state = state; this.data.pending = true; this.persist();
@@ -77,7 +97,8 @@ export class GameSync {
         if (this.readController === readController) this.readController = null;
         if (generation !== this.generation) return;
         if (remote) {
-          if (remote.revision !== this.data.revision) {
+          if (!Number.isSafeInteger(remote.revision) || remote.revision < this.data.revision) throw new Error('云端版本暂未更新');
+          if (remote.revision > this.data.revision) {
             remote.state = validateState(remote.state);
             if (!this.acknowledgeAttempt(remote)) {
               if (this.data.pending && !same(remote.state, this.data.state)) { this.setConflict(remote); return; }
@@ -115,8 +136,26 @@ export class GameSync {
     } finally {
       if (this.readController === readController) this.readController = null;
       this.busy = false;
+      const queued = this.queuedRemote; this.queuedRemote = null;
+      if (queued?.generation === this.generation) this.receiveRemote(queued.remote);
       if (generation !== this.generation || retryWrite) this.flush({ writeFirst: retryWrite });
     }
+  }
+  receiveRemote(remote) {
+    if (!remote || !Number.isSafeInteger(remote.revision) || remote.revision <= this.data.revision) return;
+    if (this.busy || this.conflict) {
+      if (!this.queuedRemote || remote.revision > this.queuedRemote.remote.revision) this.queuedRemote = { remote, generation: this.generation };
+      return;
+    }
+    try { remote = { ...remote, state: validateState(remote.state) }; }
+    catch { this.live?.stop(); return; }
+    if (this.acknowledgeAttempt(remote)) {
+      if (this.data.pending) this.flush({ writeFirst: true });
+      else this.status('saved', '已同步到云端');
+      return;
+    }
+    if (this.data.pending && !same(remote.state, this.data.state)) { this.setConflict(remote); return; }
+    this.acceptRemote(remote); this.status('saved', '已同步到云端');
   }
   acceptRemote(remote) {
     const changed = !same(this.data.state, remote.state);
@@ -145,7 +184,9 @@ export class GameSync {
     if (!remote) throw new Error('找不到这个棋局，请检查同步码并确认原设备已完成云端保存');
     remote.state = validateState(remote.state);
     this.generation++; this.conflict = null;
+    this.queuedRemote = null;
     this.data = { code, revision: remote.revision, pending: false, state: remote.state };
+    if (this.live && !document.hidden) this.live.start(code);
     this.persist(); this.onRemote(remote.state); this.status('saved', '已同步到云端');
   }
 }
