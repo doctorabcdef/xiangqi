@@ -69,6 +69,27 @@ async function openSecondDevice(browser, cloud, first) {
   return { context, page, connection, code };
 }
 
+test('another device receives moves and undo automatically without refresh or focus events', async ({ page, context, browser }) => {
+  const cloud = cloudServer();
+  await cloud.attach(context);
+  await ready(page);
+  await page.locator('#mode-local').click();
+  await saved(page);
+  const second = await openSecondDevice(browser, cloud, page);
+  try {
+    // Start just after a poll, exercising the full interval before the next one.
+    await second.page.waitForResponse(r => r.url() === CLOUD_API && r.request().method() === 'GET');
+    await move(page, 54, 45);
+    await expect(second.page.locator('#move-count')).toHaveText('1 手', { timeout: 1500 });
+    await move(second.page, 27, 36);
+    await expect(page.locator('#move-count')).toHaveText('2 手', { timeout: 1500 });
+    await page.locator('#undo').click();
+    await expect(second.page.locator('#move-count')).toHaveText('1 手', { timeout: 1500 });
+    await expect(page.locator('#conflict-dialog')).not.toBeVisible();
+    await expect(second.page.locator('#conflict-dialog')).not.toBeVisible();
+  } finally { await second.context.close(); }
+});
+
 test('local game saves, reloads, flips and undoes a move', async ({ page, context }) => {
   const cloud = cloudServer();
   await cloud.attach(context);

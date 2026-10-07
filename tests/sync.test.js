@@ -277,3 +277,92 @@ test('an old request cannot overwrite the game after joining another sync code',
   assert.equal(sync.data.state.mode, 'local');
   assert.deepEqual(sync.data.state.moves, opening.slice(0, 2));
 });
+
+test('a new move uploads immediately without a preliminary GET', async () => {
+  const { sync } = client();
+  const methods = [];
+  globalThis.fetch = async (_url, options) => {
+    methods.push(options.method);
+    assert.equal(JSON.parse(options.body).baseRevision, 1);
+    return response({ revision: 2 });
+  };
+  sync.save(stateAt(1));
+  await settled(sync);
+  assert.deepEqual(methods, ['PUT']);
+  assert.equal(sync.data.pending, false);
+});
+
+test('direct upload still detects a newer conflicting cloud move', async () => {
+  const { sync, events } = client();
+  const cloud = { ...stateAt(0), mode: 'local' };
+  globalThis.fetch = async (_url, options) => {
+    assert.equal(options.method, 'PUT');
+    return response(remote(cloud, 2), 409);
+  };
+  sync.save(stateAt(1));
+  await settled(sync);
+  assert.equal(events.conflicts, 1);
+  assert.deepEqual(sync.data.state.moves, opening.slice(0, 1));
+  assert.equal(sync.conflict.state.mode, 'local');
+});
+
+test('a move cancels an in-flight poll and uploads without waiting for that read', async () => {
+  const { sync, events } = client();
+  const methods = [];
+  let cancelled = false;
+  globalThis.fetch = async (_url, options) => {
+    methods.push(options.method);
+    if (options.method === 'GET') return new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => { cancelled = true; reject(options.signal.reason); });
+    });
+    return response({ revision: 2 });
+  };
+  const polling = sync.flush({ quiet: true });
+  sync.save(stateAt(1));
+  await polling;
+  await settled(sync);
+  assert.equal(cancelled, true);
+  assert.deepEqual(methods, ['GET', 'PUT']);
+  assert.equal(sync.data.pending, false);
+  assert.equal(events.status.some(([kind]) => kind === 'error'), false);
+});
+
+test('automatic polling is fast, silent, pauses when hidden and backs off after failure', async () => {
+  const { sync, events } = client();
+  const savedInterval = globalThis.setInterval;
+  const savedDocument = globalThis.document, savedWindow = globalThis.window;
+  let tick, interval, requests = 0, fail = false;
+  const handlers = {};
+  try {
+    globalThis.setInterval = (callback, delay) => { tick = callback; interval = delay; return 1; };
+    globalThis.document = { hidden: false, addEventListener: (name, fn) => { handlers[name] = fn; } };
+    globalThis.window = { addEventListener: (name, fn) => { handlers[name] = fn; } };
+    globalThis.fetch = async () => {
+      requests++;
+      if (fail) throw new TypeError('offline');
+      return response(remote(stateAt(0), 1));
+    };
+    await sync.start();
+    assert.equal(interval, 250);
+    events.status.length = 0;
+    tick(); await settled(sync);
+    assert.equal(requests, 2);
+    assert.equal(events.status.some(([kind]) => kind === 'pending'), false);
+    document.hidden = true;
+    tick(); assert.equal(requests, 2);
+    document.hidden = false;
+    fail = true;
+    tick(); await settled(sync);
+    assert.equal(requests, 3);
+    assert.ok(sync.nextPollAt >= Date.now() + 1500);
+    tick(); assert.equal(requests, 3);
+    fail = false;
+    handlers.online(); await settled(sync);
+    assert.equal(requests, 4);
+    assert.equal(sync.nextPollAt, 0);
+  } finally {
+    globalThis.setInterval = savedInterval;
+    if (savedDocument === undefined) delete globalThis.document; else globalThis.document = savedDocument;
+    if (savedWindow === undefined) delete globalThis.window; else globalThis.window = savedWindow;
+  }
+});

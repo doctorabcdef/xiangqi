@@ -1,6 +1,7 @@
 import { freshState, validateState } from './state.js';
 import { CLOUD_URL, DEFAULT_ROOM_CODE } from './config.js';
 export const STORAGE_KEY = 'yijian.xiangqi.v1';
+export const POLL_INTERVAL_MS = 250;
 const codePattern = /^[A-Za-z0-9_-]{32}$/;
 export const validCode = value => codePattern.test(value);
 const same = (a, b) => a.mode === b.mode && a.difficulty === b.difficulty && (a.humanSide ?? 'red') === (b.humanSide ?? 'red') && JSON.stringify(a.moves) === JSON.stringify(b.moves);
@@ -8,6 +9,7 @@ export class GameSync {
   constructor({ onRemote, onStatus, onConflict }) {
     this.onRemote = onRemote; this.onStatus = onStatus; this.onConflict = onConflict;
     this.busy = false; this.conflict = null; this.generation = 0; this.localWritable = true;
+    this.readController = null; this.failures = 0; this.nextPollAt = 0;
     this.data = { code: DEFAULT_ROOM_CODE, revision: 0, pending: false, state: freshState() };
     this.recovered = false; this.storageError = false;
     try {
@@ -35,9 +37,10 @@ export class GameSync {
       this.localWritable = true;
     } catch { this.localWritable = false; }
   }
-  async request(code, method = 'GET', body) {
+  async request(code, method = 'GET', body, signal) {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new Error('当前处于离线状态');
-    const response = await fetch(CLOUD_URL + '/api/game', { method, headers: { Authorization: `Bearer ${code}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000), cache: 'no-store', credentials: 'omit' });
+    const timeout = AbortSignal.timeout(20000);
+    const response = await fetch(CLOUD_URL + '/api/game', { method, headers: { Authorization: `Bearer ${code}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: signal ? AbortSignal.any([signal, timeout]) : timeout, cache: 'no-store', credentials: 'omit' });
     if (response.status === 404) return null;
     let data;
     try { data = await response.json(); } catch { throw new Error('云端暂时不可用'); }
@@ -48,33 +51,42 @@ export class GameSync {
   async start() {
     this.persist();
     await this.flush();
-    this.timer = setInterval(() => { if (!document.hidden) this.flush(); }, 8000);
+    this.timer = setInterval(() => { if (!document.hidden && Date.now() >= this.nextPollAt) this.flush({ quiet: true }); }, POLL_INTERVAL_MS);
     window.addEventListener('online', () => this.flush());
     document.addEventListener('visibilitychange', () => { if (!document.hidden) this.flush(); });
   }
   save(state) {
     this.data.state = state; this.data.pending = true; this.persist();
     this.status('pending', '已存本机，正在同步');
-    this.flush();
+    // A read is safe to cancel: prioritize the player's new move over polling.
+    if (this.readController) this.readController.abort();
+    else this.flush({ writeFirst: true });
   }
-  async flush() {
+  async flush({ writeFirst = false, quiet = false } = {}) {
     if (this.busy || this.conflict) return;
     this.busy = true;
     const generation = this.generation, code = this.data.code;
+    let readController, retryWrite = false;
     try {
-      this.status('pending', this.data.pending ? '正在保存到云端' : '正在检查云端进度');
-      const remote = await this.request(code);
-      if (generation !== this.generation) return;
-      if (remote) {
-        remote.state = validateState(remote.state);
-        if (remote.revision !== this.data.revision) {
-          if (!this.acknowledgeAttempt(remote)) {
-            if (this.data.pending && !same(remote.state, this.data.state)) { this.setConflict(remote); return; }
-            this.acceptRemote(remote);
+      if (!quiet || this.data.pending) this.status('pending', this.data.pending ? '正在保存到云端' : '正在检查云端进度');
+      // CAS on the server protects direct writes. Read first after a lost PUT
+      // acknowledgement, so an already committed move is not submitted twice.
+      if (!(writeFirst && this.data.pending && this.data.revision > 0 && !this.data.attempt)) {
+        readController = new AbortController(); this.readController = readController;
+        const remote = await this.request(code, 'GET', undefined, readController.signal);
+        if (this.readController === readController) this.readController = null;
+        if (generation !== this.generation) return;
+        if (remote) {
+          if (remote.revision !== this.data.revision) {
+            remote.state = validateState(remote.state);
+            if (!this.acknowledgeAttempt(remote)) {
+              if (this.data.pending && !same(remote.state, this.data.state)) { this.setConflict(remote); return; }
+              this.acceptRemote(remote);
+            }
           }
-        }
-      } else if (this.data.revision > 0) { throw new Error('云端棋局暂未找到，本机进度仍保留'); }
-      else { this.data.pending = true; this.persist(); }
+        } else if (this.data.revision > 0) { throw new Error('云端棋局暂未找到，本机进度仍保留'); }
+        else { this.data.pending = true; this.persist(); }
+      }
       while (this.data.pending && generation === this.generation && !this.conflict) {
         const state = this.data.state;
         this.data.attempt = { state, baseRevision: this.data.revision }; this.persist();
@@ -92,12 +104,18 @@ export class GameSync {
         this.data.pending = !same(state, this.data.state);
         this.persist();
       }
+      this.failures = 0; this.nextPollAt = 0;
       this.status('saved', '已同步到云端');
     } catch (error) {
-      if (generation === this.generation) this.status('error', this.data.pending ? '已存本机，等待联网同步' : '云端暂未连接，本机棋局已保留');
+      retryWrite = Boolean(readController?.signal.aborted && this.data.pending && generation === this.generation);
+      if (!retryWrite && generation === this.generation) {
+        this.nextPollAt = Date.now() + Math.min(30000, 1000 * 2 ** Math.min(++this.failures, 5));
+        this.status('error', this.data.pending ? '已存本机，等待联网同步' : '云端暂未连接，本机棋局已保留');
+      }
     } finally {
+      if (this.readController === readController) this.readController = null;
       this.busy = false;
-      if (generation !== this.generation) this.flush();
+      if (generation !== this.generation || retryWrite) this.flush({ writeFirst: retryWrite });
     }
   }
   acceptRemote(remote) {
