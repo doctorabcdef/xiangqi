@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../cloud/dist/server/index.js';
 import { freshState } from '../src/state.js';
+import { serveSocket } from '../cloud/dist/server/live.js';
 
 const migration = readFileSync(new URL('../cloud/drizzle/0000_wide_lightspeed.sql', import.meta.url), 'utf8');
 const tokenA = 'a'.repeat(32), tokenB = 'b'.repeat(32);
@@ -166,4 +167,65 @@ test('storage failures return a recoverable error instead of a successful acknow
   const result = await worker.fetch(request(), failing);
   assert.equal(result.status, 503);
   assert.match((await result.json()).error, /暂时不可用/);
+});
+
+class ServerSocket extends EventTarget {
+  constructor() { super(); this.sent = []; this.closed = null; }
+  accept() {}
+  send(value) { this.sent.push(JSON.parse(value)); }
+  close(code) { this.closed = code; }
+  receive(value) { this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(value) })); }
+}
+const drain = () => new Promise(resolve => setImmediate(resolve));
+async function socketFor(t, token = tokenA) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  const id = Buffer.from(digest).toString('hex'), socket = new ServerSocket();
+  const stop = serveSocket(socket, env, id); t.after(stop); await drain(); return socket;
+}
+
+test('live connections read independent HTTP writes and enforce the same CAS rules', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await perform({ method: 'PUT', state: freshState() });
+  const socket = await socketFor(t);
+  assert.equal(socket.sent[0].data.revision, 1);
+  await perform({ method: 'PUT', state: played(), baseRevision: 1 });
+  t.mock.timers.tick(100); await drain();
+  assert.equal(socket.sent.at(-1).data.revision, 2);
+  socket.receive({ id: 1, method: 'PUT', body: { state: freshState(), baseRevision: 1 } });
+  await drain();
+  assert.equal(socket.sent.at(-1).status, 409);
+  assert.equal(socket.sent.at(-1).data.revision, 2);
+  socket.receive({ id: 2, method: 'PUT', body: { state: { ...played(), mode: 'local' }, baseRevision: 2 } });
+  await drain();
+  assert.equal(socket.sent.at(-1).status, 200);
+  assert.equal((await (await perform()).json()).revision, 3);
+  assert.ok(sessions.every(value => value === 'first-primary'));
+});
+
+test('live connections isolate rooms and renew before the database query limit', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await perform({ method: 'PUT', state: played() });
+  const socket = await socketFor(t, tokenB);
+  assert.equal(socket.sent.length, 0);
+  for (let i = 0; i < 40; i++) { t.mock.timers.tick(100); await drain(); }
+  assert.equal(socket.closed, 1012);
+  assert.equal(socket.sent.length, 0);
+  assert.ok(sessions.length < 50);
+});
+
+test('live failures close the connection instead of leaving clients subscribed to stale data', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const socket = new ServerSocket();
+  const stop = serveSocket(socket, { DB: { prepare() { throw new Error('offline'); } } }, 'id');
+  t.after(stop); await drain(); assert.equal(socket.closed, 1011);
+});
+
+test('live null and oversized messages close without changing saved progress', async t => {
+  await perform({ method: 'PUT', state: played() });
+  for (const message of [null, { id: 1, method: 'PUT', body: 'x'.repeat(67000) }]) {
+    const socket = await socketFor(t);
+    socket.receive(message); await drain();
+    assert.equal(socket.closed, 1008);
+  }
+  assert.equal((await (await perform()).json()).revision, 1);
 });

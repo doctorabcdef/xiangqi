@@ -366,3 +366,68 @@ test('automatic polling is fast, silent, pauses when hidden and backs off after 
     if (savedWindow === undefined) delete globalThis.window; else globalThis.window = savedWindow;
   }
 });
+
+test('live snapshot before a PUT acknowledgement cannot roll back a newer local edit', async () => {
+  const { sync } = client(stateAt(0), 1);
+  let finish;
+  const writes = [];
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body); writes.push(body);
+    if (writes.length === 1) return new Promise(resolve => { finish = resolve; });
+    return response({ revision: 3 });
+  };
+  sync.save(stateAt(1));
+  sync.receiveRemote(remote(stateAt(1), 2));
+  sync.save(stateAt(2));
+  finish(response({ revision: 2 }));
+  await settled(sync);
+  assert.deepEqual(writes.map(value => value.baseRevision), [1, 2]);
+  assert.equal(sync.data.revision, 3);
+  assert.deepEqual(sync.data.state.moves, opening.slice(0, 2));
+  assert.equal(sync.queuedRemote, null);
+  sync.receiveRemote(remote(stateAt(1), 2));
+  assert.equal(sync.data.revision, 3);
+});
+
+test('queued live snapshot acknowledges a write even when its response is lost', async () => {
+  const { sync, events } = client();
+  let fail;
+  globalThis.fetch = () => new Promise((_resolve, reject) => { fail = reject; });
+  sync.save(stateAt(1));
+  sync.receiveRemote(remote(stateAt(1), 2));
+  fail(new Error('response lost'));
+  await settled(sync);
+  assert.equal(sync.data.pending, false);
+  assert.equal(sync.data.revision, 2);
+  assert.equal(events.conflicts, 0);
+});
+
+test('lost live PUT retries the identical payload over HTTP and accepts its CAS conflict acknowledgement', async () => {
+  const { sync, events } = client();
+  let submitted;
+  sync.live = { ready: true, code, async request(method, body) { submitted = structuredClone(body); throw new Error('socket closed after commit'); } };
+  globalThis.fetch = async (_url, options) => {
+    assert.deepEqual(JSON.parse(options.body), submitted);
+    return response(remote(submitted.state, submitted.baseRevision + 1), 409);
+  };
+  sync.save(stateAt(1)); await settled(sync);
+  assert.equal(sync.data.revision, 2);
+  assert.equal(sync.data.pending, false);
+  assert.equal(events.conflicts, 0);
+});
+
+test('a delayed HTTP read drains a newer live snapshot and never accepts a lower revision', async () => {
+  const { sync } = client();
+  let finish;
+  globalThis.fetch = () => new Promise(resolve => { finish = resolve; });
+  const flushing = sync.flush();
+  sync.receiveRemote(remote(stateAt(2), 3));
+  sync.receiveRemote(remote(stateAt(1), 2));
+  finish(response(remote(stateAt(1), 2))); await flushing;
+  assert.equal(sync.data.revision, 3);
+  assert.deepEqual(sync.data.state.moves, opening.slice(0, 2));
+  globalThis.fetch = async () => response(remote(stateAt(0), 1));
+  await sync.flush();
+  assert.equal(sync.data.revision, 3);
+  assert.deepEqual(sync.data.state.moves, opening.slice(0, 2));
+});

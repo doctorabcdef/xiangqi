@@ -3,14 +3,34 @@ import { test, expect } from '@playwright/test';
 const CLOUD_API = 'https://yijian-xiangqi-sync.cx668899668899.chatgpt.site/api/game';
 const STORAGE_KEY = 'yijian.xiangqi.v1';
 
-function cloudServer() {
+function cloudServer({ live = false } = {}) {
   const games = new Map();
+  const sockets = new Set();
+  let liveDisabled = false;
+  const notify = code => { for (const item of sockets) if (item.code === code) item.socket.send(JSON.stringify({ type: 'snapshot', data: games.get(code) })); };
   async function attach(context) {
     const connection = { offline: false };
+    await context.routeWebSocket(CLOUD_API.replace(/^http/, 'ws').replace('/api/game', '/api/live'), socket => {
+      if (!live || liveDisabled) { socket.close(); return; }
+      const item = { socket, code: connection.code }; sockets.add(item);
+      socket.onClose(() => sockets.delete(item));
+      socket.onMessage(raw => {
+        const message = JSON.parse(raw);
+        if (message.type === 'ping') { socket.send(JSON.stringify({ type: 'pong' })); return; }
+        const current = games.get(item.code);
+        if (message.method === 'GET') { socket.send(JSON.stringify({ type: 'response', id: message.id, status: current ? 200 : 404, data: current })); return; }
+        if (message.body.baseRevision !== current?.revision) { socket.send(JSON.stringify({ type: 'response', id: message.id, status: 409, data: current })); return; }
+        const saved = structuredClone({ revision: current.revision + 1, state: message.body.state });
+        games.set(item.code, saved); notify(item.code);
+        socket.send(JSON.stringify({ type: 'response', id: message.id, status: 200, data: { revision: saved.revision } }));
+      });
+      if (games.has(item.code)) socket.send(JSON.stringify({ type: 'snapshot', data: games.get(item.code) }));
+    });
     await context.route(CLOUD_API, async route => {
       if (connection.offline) return route.abort('internetdisconnected');
       const request = route.request();
       const code = request.headers().authorization?.replace(/^Bearer /, '');
+      connection.code = code;
       const headers = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization,content-type' };
       const reply = (status, json) => route.fulfill({ status, headers, contentType: 'application/json', body: JSON.stringify(json) });
       if (request.method() === 'OPTIONS') return reply(200, {});
@@ -21,11 +41,12 @@ function cloudServer() {
       if (body.baseRevision !== (existing?.revision ?? 0)) return reply(409, existing);
       const saved = structuredClone({ revision: (existing?.revision ?? 0) + 1, state: body.state });
       games.set(code, saved);
+      notify(code);
       return reply(200, saved);
     });
     return connection;
   }
-  return { games, attach };
+  return { games, attach, sockets, disconnectLive() { liveDisabled = true; for (const item of sockets) item.socket.close(); sockets.clear(); } };
 }
 
 async function ready(page) {
@@ -87,6 +108,32 @@ test('another device receives moves and undo automatically without refresh or fo
     await expect(second.page.locator('#move-count')).toHaveText('1 手', { timeout: 1500 });
     await expect(page.locator('#conflict-dialog')).not.toBeVisible();
     await expect(second.page.locator('#conflict-dialog')).not.toBeVisible();
+  } finally { await second.context.close(); }
+});
+
+test('live transport sends moves and undo, then falls back automatically when sockets disconnect', async ({ page, context, browser }) => {
+  const cloud = cloudServer({ live: true });
+  await cloud.attach(context); await ready(page);
+  await page.locator('#mode-local').click(); await saved(page);
+  const second = await openSecondDevice(browser, cloud, page);
+  try {
+    await expect.poll(() => cloud.sockets.size).toBe(2);
+    let httpWrites = 0;
+    context.on('request', r => { if (r.url() === CLOUD_API && r.method() === 'PUT') httpWrites++; });
+    await move(page, 54, 45);
+    await expect(second.page.locator('#move-count')).toHaveText('1 手');
+    await saved(page);
+    expect(httpWrites).toBe(0);
+    await move(second.page, 27, 36);
+    await expect(page.locator('#move-count')).toHaveText('2 手');
+    await page.locator('#undo').click();
+    await expect(second.page.locator('#move-count')).toHaveText('1 手');
+    await saved(page);
+    cloud.disconnectLive();
+    await move(second.page, 29, 38);
+    await expect(page.locator('#move-count')).toHaveText('2 手');
+    await expect(page.locator('#conflict-dialog')).not.toBeVisible();
+    await saved(second.page);
   } finally { await second.context.close(); }
 });
 
