@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, chromium } from '@playwright/test';
 
 const CLOUD_API = 'https://yijian-xiangqi-sync.cx668899668899.chatgpt.site/api/game';
 const CHAT_API = CLOUD_API.replace('/api/game', '/api/chat');
@@ -120,6 +120,8 @@ async function openSecondDevice(browser, cloud, first) {
 async function observeAudio(context) {
   await context.addInitScript(() => {
     window.voiceStarts = [];
+    window.voiceGestures = [];
+    for (const type of ['click', 'keydown', 'pointerup']) document.addEventListener(type, event => { if (event.isTrusted) window.voiceGestures.push(type); }, true);
     const prototype = (window.AudioContext || window.webkitAudioContext).prototype;
     const create = prototype.createBufferSource;
     prototype.createBufferSource = function (...args) {
@@ -142,8 +144,8 @@ test('voice broadcasts play once on each device in order while history and refre
   const receiver = await receiverContext.newPage(); await ready(receiver);
   try {
     await expect(receiver.locator('#chat-status')).toHaveText('聊天记录已同步');
-    await receiver.locator('#chat-sound').click();
-    await expect(receiver.locator('#chat-sound')).toHaveAttribute('aria-pressed', 'true');
+    await receiver.locator('#chat-title').click();
+    await expect(receiver.locator('#chat-sound')).toHaveCount(0);
     await page.locator('[data-chat-voice="too-slow"]').click();
     await page.locator('[data-chat-voice="hurry-up"]').click();
     await expect.poll(() => page.evaluate(() => voiceStarts.length)).toBe(2);
@@ -162,7 +164,7 @@ test('voice broadcasts play once on each device in order while history and refre
     await receiver.reload();
     await expect(receiver.locator('#chat-status')).toHaveText('聊天记录已同步');
     await expect(receiver.locator('.chat-message')).toHaveCount(2);
-    await receiver.locator('#chat-sound').click();
+    await receiver.locator('#chat-title').click();
     expect(await receiver.evaluate(() => voiceStarts.length)).toBe(0);
   } finally { await receiverContext.close(); }
 });
@@ -172,7 +174,7 @@ test('background tabs with the same sender identity also receive new voices', as
   await expect(page.locator('#chat-status')).toHaveText('聊天记录已同步');
   const other = await context.newPage(); await ready(other);
   await expect(other.locator('#chat-status')).toHaveText('聊天记录已同步');
-  await other.locator('#chat-sound').click();
+  await other.locator('#chat-title').click();
   await other.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
   await page.locator('[data-chat-voice="too-slow"]').click();
   await expect.poll(() => other.evaluate(() => voiceStarts.length)).toBe(1);
@@ -181,30 +183,57 @@ test('background tabs with the same sender identity also receive new voices', as
   await other.close();
 });
 
-test('a receiver can enable queued sound and mute later broadcasts without stopping chat', async ({ page, context, browser }) => {
+test('autoplay-blocked receivers unlock queued voices through an ordinary page click', async ({ page, context }) => {
   const cloud = cloudServer(); await cloud.attach(context); await ready(page);
-  const receiverContext = await browser.newContext(); await cloud.attach(receiverContext); await observeAudio(receiverContext);
+  const receiverBrowser = await chromium.launch({ ...test.info().project.use.launchOptions, args: ['--autoplay-policy=document-user-activation-required'] });
+  const receiverContext = await receiverBrowser.newContext(); await cloud.attach(receiverContext); await observeAudio(receiverContext);
   const receiver = await receiverContext.newPage(); await ready(receiver);
   try {
     await expect(receiver.locator('#chat-status')).toHaveText('聊天记录已同步');
     await page.locator('[data-chat-voice="too-slow"]').click();
     await expect(receiver.locator('.chat-message')).toHaveCount(1);
-    await expect(receiver.locator('#chat-sound-hint')).toHaveText('收到新语音，点击开启声音');
+    await expect(receiver.locator('#chat-sound')).toHaveCount(0);
+    await expect(receiver.locator('#chat-audio-notice')).toBeVisible();
     expect(await receiver.evaluate(() => voiceStarts.length)).toBe(0);
-    await receiver.locator('#chat-sound').click();
+    await receiver.locator('#board').click({ position: { x: 3, y: 3 } });
     await expect.poll(() => receiver.evaluate(() => voiceStarts.length)).toBe(1);
-    await receiver.locator('#chat-sound').click();
-    await expect(receiver.locator('#chat-sound-hint')).toHaveText('本机已静音');
+    await expect(receiver.locator('#chat-audio-notice')).toBeHidden();
     await page.locator('[data-chat-voice="hurry-up"]').click();
     await expect(receiver.locator('.chat-message')).toHaveCount(2);
-    expect(await receiver.evaluate(() => voiceStarts.length)).toBe(1);
-    await receiver.locator('#chat-sound').click();
-    expect(await receiver.evaluate(() => voiceStarts.length)).toBe(1);
+    await expect.poll(() => receiver.evaluate(() => voiceStarts.length)).toBe(2);
+    await expect(receiver.locator('[data-chat-play][data-clip="hurry-up"]')).toHaveAttribute('aria-label', '播放搞快点好不');
     // Clicking a message replays it locally without broadcasting another row.
     await receiver.locator('[data-chat-play][data-clip="hurry-up"]').click();
-    await expect.poll(() => receiver.evaluate(() => voiceStarts.length)).toBe(2);
+    await expect.poll(() => receiver.evaluate(() => voiceStarts.length)).toBe(3);
     expect(cloud.chats.get((await snapshot(page)).code)).toHaveLength(2);
-  } finally { await receiverContext.close(); }
+  } finally { await receiverBrowser.close(); }
+});
+
+test('receivers autoplay without any click when the browser allows it, ignoring the old mute setting', async ({ page, context }) => {
+  const cloud = cloudServer(); await cloud.attach(context); await ready(page);
+  const receiverBrowser = await chromium.launch({ ...test.info().project.use.launchOptions, args: ['--autoplay-policy=no-user-gesture-required'] });
+  try {
+    const receiverContext = await receiverBrowser.newContext(); await cloud.attach(receiverContext); await observeAudio(receiverContext);
+    await receiverContext.addInitScript(() => localStorage.setItem('yijian.chat.sound', 'false'));
+    const receiver = await receiverContext.newPage();
+    const protocol = await receiverContext.newCDPSession(receiver);
+    // Playwright page.evaluate grants synthetic user activation. Inspect this
+    // no-interaction case through CDP with that grant explicitly disabled.
+    const read = async expression => (await protocol.send('Runtime.evaluate', { expression, returnByValue: true, userGesture: false })).result.value;
+    await receiver.goto('/');
+    await expect.poll(() => read("document.querySelector('#chat-status')?.textContent")).toBe('聊天记录已同步');
+    expect(await read("document.querySelector('#chat-sound') === null")).toBe(true);
+    for (const [index, clip] of ['too-slow', 'hurry-up'].entries()) {
+      await page.locator('[data-chat-voice="' + clip + '"]').click();
+      await expect.poll(() => read('voiceStarts.length')).toBe(index + 1);
+    }
+    expect(await read('voiceGestures.length')).toBe(0);
+    expect(await read("document.querySelector('#chat-audio-notice').hidden")).toBe(true);
+    await receiver.reload();
+    await expect.poll(() => read("document.querySelector('#chat-status')?.textContent")).toBe('聊天记录已同步');
+    expect(await read("document.querySelectorAll('.chat-message').length")).toBe(2);
+    expect(await read('voiceStarts.length')).toBe(0);
+  } finally { await receiverBrowser.close(); }
 });
 
 test('chat saves text, nickname, emoji and both supplied voice clips across devices and reloads', async ({ page, context, browser }) => {

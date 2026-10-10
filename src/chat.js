@@ -19,17 +19,12 @@ export function mountChat(getRoom) {
   let room, generation = 0, messages = new Map(), pending = [], loaded = false, more = false, cursor = 0, oldestCursor = 0, reading, sending, nextRetry = 0, failures = 0, writable = true;
   let playing = null;
   const status = (text, error = false) => { $('chat-status').textContent = text; $('chat-status').classList.toggle('error', error); };
-  const sound = new ChatAudio({ clips: VOICES, enabled: readLocal('yijian.chat.sound') !== false,
+  const sound = new ChatAudio({ clips: VOICES,
     onChange: state => {
       playing = state.playing; playbackState();
-      const ready = state.enabled && state.ready;
-      $('chat-sound').textContent = ready ? '声音已开启' : '开启声音';
-      $('chat-sound').setAttribute('aria-pressed', String(ready));
-      $('chat-sound').title = ready ? '点击关闭本机自动语音' : '点击接收并播放其他设备发来的语音';
-      $('chat-sound-hint').textContent = !state.enabled ? '本机已静音' : ready ? '收到新语音时自动播放' : state.waiting ? '收到新语音，点击开启声音' : '点一下页面即可接收语音';
+      $('chat-audio-notice').hidden = state.ready || !state.waiting;
     }, onError: text => status(text, true),
   });
-  const saveSoundPreference = () => { try { localStorage.setItem('yijian.chat.sound', JSON.stringify(sound.enabled)); } catch {} };
   const outboxKey = id => 'yijian.chat.outbox.' + room + '.' + id;
   function readOutbox() {
     try {
@@ -115,7 +110,7 @@ export function mountChat(getRoom) {
         const info = document.createElement('span'); info.className = 'chat-voice-info';
         const title = document.createElement('span'); title.textContent = VOICES[message.content].label;
         const hint = document.createElement('small'); hint.textContent = VOICES[message.content].seconds + ' 秒 · 点击重播';
-        info.append(title, hint); bubble.append(icon, info); bubble.addEventListener('click', () => { sound.replay(message.content, message.id); saveSoundPreference(); });
+        info.append(title, hint); bubble.append(icon, info); bubble.addEventListener('click', () => sound.replay(message.content, message.id));
       } else bubble.textContent = message.content;
       item.append(bubble);
       if (mine) {
@@ -211,13 +206,12 @@ export function mountChat(getRoom) {
   $('chat-form').addEventListener('submit', event => { event.preventDefault(); if (enqueue('text', $('chat-text').value)) { $('chat-text').value = ''; updateCount(); } });
   for (const button of document.querySelectorAll('[data-chat-text]')) button.onclick = () => enqueue('text', button.dataset.chatText);
   for (const button of document.querySelectorAll('[data-chat-voice]')) button.onclick = () => {
-    sound.unlock(); saveSoundPreference();
+    sound.unlock();
     const id = enqueue('voice', button.dataset.chatVoice);
     if (id) sound.receive(button.dataset.chatVoice, id);
   };
-  $('chat-sound').onclick = () => { if (sound.enabled && sound.state.ready) sound.mute(); else sound.unlock(); saveSoundPreference(); };
   const unlockOnGesture = event => {
-    if (event.isTrusted && !event.target.closest?.('#chat-sound') && sound.enabled && !sound.state.ready) sound.unlock();
+    if (event.isTrusted && !sound.state.ready) sound.unlock();
   };
   document.addEventListener('click', unlockOnGesture, { capture: true });
   document.addEventListener('keydown', unlockOnGesture, { capture: true });
@@ -230,6 +224,13 @@ export function mountChat(getRoom) {
   // Keep receiving voices in background tabs while the browser allows timers.
   const tick = () => { void refresh(); void sendPending(); };
   window.addEventListener('online', () => { nextRetry = 0; tick(); });
-  document.addEventListener('visibilitychange', tick);
-  selectRoom(); tick(); setInterval(tick, 500);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && !sound.state.ready) sound.unlock();
+    tick();
+  });
+  selectRoom();
+  // Attempt autoplay immediately. Browsers that permit it need no interaction;
+  // others keep new clips queued until a normal page click or keypress.
+  sound.unlock();
+  tick(); setInterval(tick, 500);
 }

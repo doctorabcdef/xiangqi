@@ -63,6 +63,42 @@ test('chat audio waits for a gesture and resumes the context before fetching a c
   assert.equal(run.sources.length, 1);
 });
 
+test('a pending automatic resume does not block a later gesture or replay after settling', async () => {
+  const initialResume = deferred(), run = setup();
+  let resumes = 0;
+  run.context.resume = function () {
+    resumes++;
+    if (resumes === 1) return initialResume.promise;
+    this.state = 'running';
+    return Promise.resolve();
+  };
+
+  assert.equal(run.sound.unlock(), undefined, 'chat initialization must return without awaiting browser permission');
+  run.sound.receive('first', 'arrived-while-locked');
+  await settle();
+  assert.equal(resumes, 1);
+  assert.equal(run.sound.state.ready, false);
+  assert.equal(run.sound.state.waiting, true);
+  assert.deepEqual(run.fetched, []);
+
+  run.sound.unlock();
+  assert.equal(resumes, 2, 'a real gesture must call resume even while the automatic attempt is pending');
+  await settle();
+  assert.equal(run.sound.state.playing, 'arrived-while-locked');
+  assert.equal(run.sources.length, 1);
+  assert.equal(run.sources[0].starts, 1);
+
+  initialResume.resolve();
+  await settle();
+  assert.equal(run.sources.length, 1);
+  assert.equal(run.sound.state.playing, 'arrived-while-locked');
+  run.sources[0].finish();
+  await settle();
+  assert.equal(run.sound.state.playing, null);
+  assert.equal(run.sound.state.waiting, false);
+  assert.equal(run.sources.length, 1);
+});
+
 test('chat audio deduplicates message IDs and plays a batch in FIFO order', async () => {
   const run = setup();
   run.sound.receive('first', 'one');
