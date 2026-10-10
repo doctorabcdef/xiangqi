@@ -1,4 +1,5 @@
 import { CLOUD_URL } from './config.js';
+import { ChatAudio } from './chat-audio.js';
 
 export const VOICES = {
   'too-slow': { label: '太慢了太慢了', seconds: 2, url: new URL('../assets/voices/too-slow.m4a', import.meta.url).href },
@@ -16,8 +17,19 @@ export function mountChat(getRoom) {
   const persistIdentity = () => { try { localStorage.setItem('yijian.chat.identity', JSON.stringify({ senderId, nickname: $('chat-name').value })); } catch {} };
   persistIdentity(); $('chat-name').addEventListener('input', persistIdentity);
   let room, generation = 0, messages = new Map(), pending = [], loaded = false, more = false, cursor = 0, oldestCursor = 0, reading, sending, nextRetry = 0, failures = 0, writable = true;
-  let audio, playing = null;
+  let playing = null;
   const status = (text, error = false) => { $('chat-status').textContent = text; $('chat-status').classList.toggle('error', error); };
+  const sound = new ChatAudio({ clips: VOICES, enabled: readLocal('yijian.chat.sound') !== false,
+    onChange: state => {
+      playing = state.playing; playbackState();
+      const ready = state.enabled && state.ready;
+      $('chat-sound').textContent = ready ? '声音已开启' : '开启声音';
+      $('chat-sound').setAttribute('aria-pressed', String(ready));
+      $('chat-sound').title = ready ? '点击关闭本机自动语音' : '点击接收并播放其他设备发来的语音';
+      $('chat-sound-hint').textContent = !state.enabled ? '本机已静音' : ready ? '收到新语音时自动播放' : state.waiting ? '收到新语音，点击开启声音' : '点一下页面即可接收语音';
+    }, onError: text => status(text, true),
+  });
+  const saveSoundPreference = () => { try { localStorage.setItem('yijian.chat.sound', JSON.stringify(sound.enabled)); } catch {} };
   const outboxKey = id => 'yijian.chat.outbox.' + room + '.' + id;
   function readOutbox() {
     try {
@@ -40,6 +52,7 @@ export function mountChat(getRoom) {
     const next = getRoom();
     if (next === room) return;
     if (room) persist();
+    sound.reset();
     room = next; generation++; loaded = false; more = false; cursor = 0; oldestCursor = 0; failures = 0; nextRetry = 0;
     const saved = readLocal('yijian.chat.' + room);
     messages = new Map((Array.isArray(saved?.messages) ? saved.messages : []).filter(m => valid(m) && Number.isSafeInteger(m.sequence) && m.sequence > 0).map(m => [m.id, m]));
@@ -79,17 +92,6 @@ export function mountChat(getRoom) {
       button.setAttribute('aria-label', (active ? '暂停' : '播放') + VOICES[button.dataset.clip].label);
     }
   }
-  function play(clip, id) {
-    if (!VOICES[clip]) return;
-    if (!audio) {
-      audio = new Audio();
-      audio.addEventListener('ended', () => { playing = null; playbackState(); });
-      audio.addEventListener('error', () => { playing = null; playbackState(); status('语音暂时无法播放，请稍后重试', true); });
-    }
-    if (playing === id && !audio.paused) { audio.pause(); playing = null; playbackState(); return; }
-    audio.pause(); audio.src = VOICES[clip].url; audio.currentTime = 0; playing = id; playbackState();
-    audio.play().catch(() => { playing = null; playbackState(); status('语音暂时无法播放，请点击消息重试', true); });
-  }
   function render(forceBottom = false) {
     const list = $('chat-messages'), atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 45;
     const values = [...messages.values()].sort((a, b) => a.sequence - b.sequence).concat(pending);
@@ -113,7 +115,7 @@ export function mountChat(getRoom) {
         const info = document.createElement('span'); info.className = 'chat-voice-info';
         const title = document.createElement('span'); title.textContent = VOICES[message.content].label;
         const hint = document.createElement('small'); hint.textContent = VOICES[message.content].seconds + ' 秒 · 点击重播';
-        info.append(title, hint); bubble.append(icon, info); bubble.addEventListener('click', () => play(message.content, message.id));
+        info.append(title, hint); bubble.append(icon, info); bubble.addEventListener('click', () => { sound.replay(message.content, message.id); saveSoundPreference(); });
       } else bubble.textContent = message.content;
       item.append(bubble);
       if (mine) {
@@ -140,6 +142,7 @@ export function mountChat(getRoom) {
     if (older) $('chat-more').disabled = true;
     try {
       const result = await request(ticket.room, 'GET', undefined, query);
+      if (ticket.room !== getRoom()) { selectRoom(); return; }
       if (ticket.generation !== generation) return;
       if (!Array.isArray(result.messages)) throw new Error('聊天记录暂时无法读取');
       if (!older) for (const message of result.messages) if (Number.isSafeInteger(message.sequence)) cursor = Math.max(cursor, message.sequence);
@@ -157,6 +160,11 @@ export function mountChat(getRoom) {
         messages = new Map([...messages].filter(([, message]) => message.sequence > newest));
       }
       loaded = true; merge(result.messages, first);
+      // Initial/history reads stay silent. The audio controller tracks this
+      // tab's deliveries independently of message cache and sender identity.
+      if (!first && !older) for (const message of result.messages) {
+        if (valid(message) && Number.isSafeInteger(message.sequence) && message.sequence > 0 && message.kind === 'voice') sound.receive(message.content, message.id);
+      }
       $('chat-more').hidden = !more;
       if (older) list.scrollTop = previousTop + (list.scrollHeight - previousHeight);
       if (first) status(pending.length ? '正在发送待发送的消息…' : '聊天记录已同步');
@@ -174,6 +182,7 @@ export function mountChat(getRoom) {
         const message = pending[0]; message.failed = false; render();
         const { id, senderId, nickname, kind, content } = message;
         const result = await request(ticket.room, 'POST', { id, senderId, nickname, kind, content });
+        if (ticket.room !== getRoom()) { selectRoom(); return; }
         if (ticket.generation !== generation) return;
         if (!valid(result.message) || result.message.id !== id || !Number.isSafeInteger(result.message.sequence)) throw new Error('保存未完成');
         merge([result.message], true); failures = 0; nextRetry = 0; status('消息已发送');
@@ -201,15 +210,26 @@ export function mountChat(getRoom) {
   $('chat-text').addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); $('chat-form').requestSubmit(); } });
   $('chat-form').addEventListener('submit', event => { event.preventDefault(); if (enqueue('text', $('chat-text').value)) { $('chat-text').value = ''; updateCount(); } });
   for (const button of document.querySelectorAll('[data-chat-text]')) button.onclick = () => enqueue('text', button.dataset.chatText);
-  for (const button of document.querySelectorAll('[data-chat-voice]')) button.onclick = () => { const id = enqueue('voice', button.dataset.chatVoice); if (id) play(button.dataset.chatVoice, id); };
+  for (const button of document.querySelectorAll('[data-chat-voice]')) button.onclick = () => {
+    sound.unlock(); saveSoundPreference();
+    const id = enqueue('voice', button.dataset.chatVoice);
+    if (id) sound.receive(button.dataset.chatVoice, id);
+  };
+  $('chat-sound').onclick = () => { if (sound.enabled && sound.state.ready) sound.mute(); else sound.unlock(); saveSoundPreference(); };
+  const unlockOnGesture = event => {
+    if (event.isTrusted && !event.target.closest?.('#chat-sound') && sound.enabled && !sound.state.ready) sound.unlock();
+  };
+  document.addEventListener('click', unlockOnGesture, { capture: true });
+  document.addEventListener('keydown', unlockOnGesture, { capture: true });
   for (const button of document.querySelectorAll('.chat-emojis button')) button.onclick = () => {
     const field = $('chat-text'), emoji = button.textContent;
     if (field.value.length - (field.selectionEnd - field.selectionStart) + emoji.length > 500) return;
     field.setRangeText(emoji, field.selectionStart, field.selectionEnd, 'end'); updateCount(); field.focus();
   };
   $('chat-more').onclick = () => void refresh(true);
-  const tick = () => { if (!document.hidden) { void refresh(); void sendPending(); } };
+  // Keep receiving voices in background tabs while the browser allows timers.
+  const tick = () => { void refresh(); void sendPending(); };
   window.addEventListener('online', () => { nextRetry = 0; tick(); });
   document.addEventListener('visibilitychange', tick);
-  selectRoom(); tick(); setInterval(tick, 1500);
+  selectRoom(); tick(); setInterval(tick, 500);
 }

@@ -117,6 +117,96 @@ async function openSecondDevice(browser, cloud, first) {
   return { context, page, connection, code };
 }
 
+async function observeAudio(context) {
+  await context.addInitScript(() => {
+    window.voiceStarts = [];
+    const prototype = (window.AudioContext || window.webkitAudioContext).prototype;
+    const create = prototype.createBufferSource;
+    prototype.createBufferSource = function (...args) {
+      const source = create.apply(this, args), start = source.start.bind(source);
+      source.start = (...values) => {
+        start(...values);
+        const entry = { duration: source.buffer.duration, started: performance.now(), ended: null };
+        window.voiceStarts.push(entry);
+        source.addEventListener('ended', () => { entry.ended = performance.now(); });
+      };
+      return source;
+    };
+  });
+}
+
+test('voice broadcasts play once on each device in order while history and refresh stay silent', async ({ page, context, browser }) => {
+  const cloud = cloudServer(); await cloud.attach(context); await observeAudio(context); await ready(page);
+  await expect(page.locator('#chat-status')).toHaveText('聊天记录已同步');
+  const receiverContext = await browser.newContext(); await cloud.attach(receiverContext); await observeAudio(receiverContext);
+  const receiver = await receiverContext.newPage(); await ready(receiver);
+  try {
+    await expect(receiver.locator('#chat-status')).toHaveText('聊天记录已同步');
+    await receiver.locator('#chat-sound').click();
+    await expect(receiver.locator('#chat-sound')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('[data-chat-voice="too-slow"]').click();
+    await page.locator('[data-chat-voice="hurry-up"]').click();
+    await expect.poll(() => page.evaluate(() => voiceStarts.length)).toBe(2);
+    await expect.poll(() => receiver.evaluate(() => voiceStarts.length)).toBe(2);
+    for (const device of [page, receiver]) {
+      const starts = await device.evaluate(() => voiceStarts);
+      expect(starts[0].duration).toBeCloseTo(1.109, 2);
+      expect(starts[1].duration).toBeCloseTo(1.237, 2);
+      expect(starts[0].ended).not.toBeNull();
+      expect(starts[1].started).toBeGreaterThanOrEqual(starts[0].ended);
+    }
+    // Subsequent polls and manual loading of history must not repeat delivery.
+    await receiver.waitForResponse(r => r.url().startsWith(CHAT_API) && r.request().method() === 'GET');
+    expect(await receiver.evaluate(() => voiceStarts.length)).toBe(2);
+    expect(await page.evaluate(() => voiceStarts.length)).toBe(2);
+    await receiver.reload();
+    await expect(receiver.locator('#chat-status')).toHaveText('聊天记录已同步');
+    await expect(receiver.locator('.chat-message')).toHaveCount(2);
+    await receiver.locator('#chat-sound').click();
+    expect(await receiver.evaluate(() => voiceStarts.length)).toBe(0);
+  } finally { await receiverContext.close(); }
+});
+
+test('background tabs with the same sender identity also receive new voices', async ({ page, context }) => {
+  const cloud = cloudServer(); await cloud.attach(context); await observeAudio(context); await ready(page);
+  await expect(page.locator('#chat-status')).toHaveText('聊天记录已同步');
+  const other = await context.newPage(); await ready(other);
+  await expect(other.locator('#chat-status')).toHaveText('聊天记录已同步');
+  await other.locator('#chat-sound').click();
+  await other.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.locator('[data-chat-voice="too-slow"]').click();
+  await expect.poll(() => other.evaluate(() => voiceStarts.length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => voiceStarts.length)).toBe(1);
+  await expect(other.locator('.chat-message.mine')).toHaveCount(1);
+  await other.close();
+});
+
+test('a receiver can enable queued sound and mute later broadcasts without stopping chat', async ({ page, context, browser }) => {
+  const cloud = cloudServer(); await cloud.attach(context); await ready(page);
+  const receiverContext = await browser.newContext(); await cloud.attach(receiverContext); await observeAudio(receiverContext);
+  const receiver = await receiverContext.newPage(); await ready(receiver);
+  try {
+    await expect(receiver.locator('#chat-status')).toHaveText('聊天记录已同步');
+    await page.locator('[data-chat-voice="too-slow"]').click();
+    await expect(receiver.locator('.chat-message')).toHaveCount(1);
+    await expect(receiver.locator('#chat-sound-hint')).toHaveText('收到新语音，点击开启声音');
+    expect(await receiver.evaluate(() => voiceStarts.length)).toBe(0);
+    await receiver.locator('#chat-sound').click();
+    await expect.poll(() => receiver.evaluate(() => voiceStarts.length)).toBe(1);
+    await receiver.locator('#chat-sound').click();
+    await expect(receiver.locator('#chat-sound-hint')).toHaveText('本机已静音');
+    await page.locator('[data-chat-voice="hurry-up"]').click();
+    await expect(receiver.locator('.chat-message')).toHaveCount(2);
+    expect(await receiver.evaluate(() => voiceStarts.length)).toBe(1);
+    await receiver.locator('#chat-sound').click();
+    expect(await receiver.evaluate(() => voiceStarts.length)).toBe(1);
+    // Clicking a message replays it locally without broadcasting another row.
+    await receiver.locator('[data-chat-play][data-clip="hurry-up"]').click();
+    await expect.poll(() => receiver.evaluate(() => voiceStarts.length)).toBe(2);
+    expect(cloud.chats.get((await snapshot(page)).code)).toHaveLength(2);
+  } finally { await receiverContext.close(); }
+});
+
 test('chat saves text, nickname, emoji and both supplied voice clips across devices and reloads', async ({ page, context, browser }) => {
   const cloud = cloudServer(); await cloud.attach(context); await ready(page);
   await expect(page.locator('#chat-status')).toHaveText('聊天记录已同步');
