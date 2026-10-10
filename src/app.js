@@ -1,7 +1,7 @@
 import { label, legalMoves, inCheck, outcome, replay } from './engine.js';
 import { freshState, validateState } from './state.js';
 import { GameSync } from './sync.js?v=20261007-live';
-import { mountChat } from './chat.js';
+import { mountChat } from './chat.js?v=20261010-broadcast';
 const $ = id => document.getElementById(id);
 let state, game, selected = null, targets = [], flipped = false, ready = false, thinking = false, worker = null, aiTimer = null, generation = 0, toastTimer;
 function saveOrientation(next = state) {
